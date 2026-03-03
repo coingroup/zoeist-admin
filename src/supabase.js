@@ -7,6 +7,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export const ADMIN_API_URL = `${supabaseUrl}/functions/v1/admin-api`;
 export const YEAR_END_API_URL = `${supabaseUrl}/functions/v1/send-year-end-statements`;
+export const RECURRING_API_URL = `${supabaseUrl}/functions/v1/recurring-api`;
 
 export async function adminFetch(path, options = {}) {
   const { data: { session } } = await supabase.auth.getSession();
