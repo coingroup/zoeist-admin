@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch, YEAR_END_API_URL } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -1317,6 +1317,287 @@ function ComplianceView() {
 }
 
 /* ═══════════════════════════════════════════
+   RECURRING DONATIONS VIEW
+   ═══════════════════════════════════════════ */
+function RecurringView() {
+  const [stats, setStats] = useState(null);
+  const [recurring, setRecurring] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [detail, setDetail] = useState(null); // { recurring, donations }
+  const [actionLoading, setActionLoading] = useState(null); // recurring_id being acted upon
+
+  const loadStats = async () => {
+    try {
+      const data = await adminFetch(`${RECURRING_API_URL}/stats`);
+      setStats(data);
+    } catch (err) { console.error('Stats error:', err); }
+  };
+
+  const loadList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: '25' });
+      if (search) params.set('search', search);
+      if (statusFilter) params.set('status', statusFilter);
+      const data = await adminFetch(`${RECURRING_API_URL}/list?${params}`);
+      setRecurring(data.recurring || []);
+      setTotalPages(data.totalPages || 1);
+      setTotal(data.total || 0);
+    } catch (err) { console.error('List error:', err); }
+    setLoading(false);
+  }, [page, search, statusFilter]);
+
+  useEffect(() => { loadStats(); }, []);
+  useEffect(() => { loadList(); }, [loadList]);
+
+  const loadDetail = async (id) => {
+    try {
+      const data = await adminFetch(`${RECURRING_API_URL}/detail/${id}`);
+      setDetail(data);
+    } catch (err) { alert('Failed to load details: ' + err.message); }
+  };
+
+  const handleAction = async (action, recurringId) => {
+    const labels = { cancel: 'cancel this subscription', pause: 'pause this subscription', resume: 'resume this subscription' };
+    if (action === 'cancel' && !confirm(`Are you sure you want to ${labels[action]}? This cannot be undone.`)) return;
+    setActionLoading(recurringId);
+    try {
+      await adminFetch(`${RECURRING_API_URL}/${action}`, {
+        method: 'POST',
+        body: JSON.stringify({ recurring_id: recurringId }),
+      });
+      loadList();
+      loadStats();
+      if (detail?.recurring?.id === recurringId) setDetail(null);
+    } catch (err) { alert(`Failed to ${action}: ${err.message}`); }
+    setActionLoading(null);
+  };
+
+  const handleSearch = (e) => {
+    e.preventDefault();
+    setPage(1);
+    loadList();
+  };
+
+  const frequencyLabel = (f) => {
+    if (f === 'monthly') return 'Monthly';
+    if (f === 'quarterly') return 'Quarterly';
+    if (f === 'annual') return 'Annual';
+    return f || '—';
+  };
+
+  const statusBadge = (s) => {
+    const cls = s === 'active' ? 'badge-green' : s === 'paused' ? 'badge-blue' : 'badge-red';
+    return <span className={`badge ${cls}`}>{s}</span>;
+  };
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Recurring Donations</h2>
+        <p>Subscription-based donations and management</p>
+      </div>
+
+      {/* Stats Cards */}
+      {stats && (
+        <div className="kpi-grid" style={{ marginBottom: 24 }}>
+          <div className="kpi-card">
+            <div className="kpi-label">Active</div>
+            <div className="kpi-value" style={{ color: 'var(--green)' }}>{stats.active}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Paused</div>
+            <div className="kpi-value" style={{ color: 'var(--blue)' }}>{stats.paused}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Cancelled</div>
+            <div className="kpi-value" style={{ color: 'var(--red)' }}>{stats.cancelled}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Est. Monthly Revenue</div>
+            <div className="kpi-value">{fmt(stats.mrr_cents)}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '16px 20px' }}>
+          <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8, flex: 1 }}>
+            <input
+              placeholder="Search by donor name or email..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button className="btn btn-gold btn-sm" type="submit">Search</button>
+          </form>
+          <select
+            value={statusFilter}
+            onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+            style={{ background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}
+          >
+            <option value="">All Statuses</option>
+            <option value="active">Active</option>
+            <option value="paused">Paused</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Donor</th>
+                <th>Email</th>
+                <th>Amount</th>
+                <th>Frequency</th>
+                <th>Status</th>
+                <th>Next Billing</th>
+                <th>Installments</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>
+              )}
+              {!loading && recurring.length === 0 && (
+                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No recurring donations found</td></tr>
+              )}
+              {!loading && recurring.map(r => (
+                <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => loadDetail(r.id)}>
+                  <td className="td-primary">{r.donor_name || '—'}</td>
+                  <td>{r.donor_email || '—'}</td>
+                  <td className="td-mono">{fmt(r.amount_cents)}</td>
+                  <td>{frequencyLabel(r.frequency)}</td>
+                  <td>{statusBadge(r.status)}</td>
+                  <td>{r.status === 'active' ? fmtDate(r.next_billing_date) : '—'}</td>
+                  <td className="td-mono">{r.installment_count || 0}</td>
+                  <td onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6 }}>
+                    {r.status === 'active' && (
+                      <>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleAction('pause', r.id)} disabled={actionLoading === r.id}>Pause</button>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleAction('cancel', r.id)} disabled={actionLoading === r.id}>Cancel</button>
+                      </>
+                    )}
+                    {r.status === 'paused' && (
+                      <>
+                        <button className="btn btn-gold btn-sm" onClick={() => handleAction('resume', r.id)} disabled={actionLoading === r.id}>Resume</button>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleAction('cancel', r.id)} disabled={actionLoading === r.id}>Cancel</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="pagination">
+            <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button>
+            <span>Page {page} of {totalPages} ({total} total)</span>
+            <button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
+          </div>
+        )}
+      </div>
+
+      {/* Detail Modal */}
+      {detail && (
+        <div className="modal-overlay" onClick={() => setDetail(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700 }}>
+            <h3>Recurring Donation Details</h3>
+
+            {/* Summary badges */}
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+              <div className="donor-badge">
+                <span className="donor-badge-label">Amount</span>
+                <span className="donor-badge-value">{fmt(detail.recurring.amount_cents)}/{detail.recurring.frequency}</span>
+              </div>
+              <div className="donor-badge">
+                <span className="donor-badge-label">Status</span>
+                <span className="donor-badge-value">{statusBadge(detail.recurring.status)}</span>
+              </div>
+              <div className="donor-badge">
+                <span className="donor-badge-label">Installments</span>
+                <span className="donor-badge-value">{detail.recurring.installment_count || 0}</span>
+              </div>
+              <div className="donor-badge">
+                <span className="donor-badge-label">Started</span>
+                <span className="donor-badge-value">{fmtDate(detail.recurring.started_at)}</span>
+              </div>
+            </div>
+
+            {/* Donor info */}
+            <div style={{ marginBottom: 16 }}>
+              <DonorDetailField label="Donor" value={detail.recurring.donor_name} />
+              <DonorDetailField label="Email" value={detail.recurring.donor_email} />
+              <DonorDetailField label="Designation" value={detail.recurring.designation || 'Unrestricted'} />
+              <DonorDetailField label="Next Billing" value={detail.recurring.status === 'active' ? fmtDate(detail.recurring.next_billing_date) : '—'} />
+              {detail.recurring.cancelled_at && (
+                <DonorDetailField label="Cancelled" value={`${fmtDate(detail.recurring.cancelled_at)} — ${detail.recurring.cancel_reason || ''}`} />
+              )}
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+              {detail.recurring.status === 'active' && (
+                <>
+                  <button className="btn btn-ghost" onClick={() => { handleAction('pause', detail.recurring.id); setDetail(null); }}>Pause</button>
+                  <button className="btn btn-danger" onClick={() => { handleAction('cancel', detail.recurring.id); setDetail(null); }}>Cancel Subscription</button>
+                </>
+              )}
+              {detail.recurring.status === 'paused' && (
+                <>
+                  <button className="btn btn-gold" onClick={() => { handleAction('resume', detail.recurring.id); setDetail(null); }}>Resume</button>
+                  <button className="btn btn-danger" onClick={() => { handleAction('cancel', detail.recurring.id); setDetail(null); }}>Cancel Subscription</button>
+                </>
+              )}
+            </div>
+
+            {/* Payment History */}
+            <h4 style={{ marginBottom: 10, color: 'var(--text)' }}>Payment History</h4>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Receipt #</th><th>Amount</th><th>Date</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {(detail.donations || []).map(d => (
+                    <tr key={d.id}>
+                      <td className="td-mono">{d.receipt_number || '—'}</td>
+                      <td className="td-mono">{fmt(d.amount_cents)}</td>
+                      <td>{fmtDate(d.donated_at)}</td>
+                      <td><span className={`badge ${d.status === 'succeeded' ? 'badge-green' : 'badge-red'}`}>{d.status}</span></td>
+                    </tr>
+                  ))}
+                  {(!detail.donations || detail.donations.length === 0) && (
+                    <tr><td colSpan={4} style={{ textAlign: 'center', padding: 20, color: 'var(--text-dim)' }}>No payments yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: 16 }}>
+              <button className="btn btn-ghost" onClick={() => setDetail(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════ */
 export default function App() {
@@ -1365,6 +1646,7 @@ export default function App() {
             <NavLink to="/" end><span className="nav-icon">◉</span> Overview</NavLink>
             <NavLink to="/donations"><span className="nav-icon">◈</span> Donations</NavLink>
             <NavLink to="/donors"><span className="nav-icon">◎</span> Donors</NavLink>
+            <NavLink to="/recurring"><span className="nav-icon">↻</span> Recurring</NavLink>
             <NavLink to="/compliance"><span className="nav-icon">◇</span> Compliance</NavLink>
           </nav>
 
@@ -1379,6 +1661,7 @@ export default function App() {
             <Route path="/" element={<OverviewView />} />
             <Route path="/donations" element={<DonationsView />} />
             <Route path="/donors" element={<DonorsView />} />
+            <Route path="/recurring" element={<RecurringView />} />
             <Route path="/compliance" element={<ComplianceView />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
