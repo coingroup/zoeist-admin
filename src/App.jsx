@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -161,6 +161,7 @@ const STYLES = `
   }
   .alert-warning { background: rgba(200,168,85,0.1); border: 1px solid rgba(200,168,85,0.2); color: var(--gold-text); }
   .alert-danger { background: var(--red-bg); border: 1px solid rgba(248,113,113,0.2); color: var(--red); }
+  .alert-success { background: var(--green-bg); border: 1px solid rgba(74,222,128,0.2); color: var(--green); }
 
   /* Modal */
   .modal-overlay {
@@ -812,6 +813,14 @@ function ComplianceView() {
   const [formData, setFormData] = useState({});
   const [saving, setSaving] = useState(false);
 
+  // Year-End Statements state
+  const [yeTaxYear, setYeTaxYear] = useState(new Date().getFullYear() - 1);
+  const [yeStatus, setYeStatus] = useState(null); // { total_donors, generated, sent, donors }
+  const [yeLoading, setYeLoading] = useState(false);
+  const [yeGenerating, setYeGenerating] = useState(false);
+  const [yeSending, setYeSending] = useState(false);
+  const [yeResult, setYeResult] = useState(null); // last operation result message
+
   const load = () => {
     setLoading(true);
     adminFetch('compliance').then(setData).catch(console.error).finally(() => setLoading(false));
@@ -873,6 +882,81 @@ function ComplianceView() {
   };
 
   const updateField = (field, value) => setFormData(prev => ({ ...prev, [field]: value }));
+
+  // Year-End Statements functions
+  const yeLoadStatus = async (year) => {
+    setYeLoading(true);
+    setYeResult(null);
+    try {
+      const res = await adminFetch(`${YEAR_END_API_URL}/status?tax_year=${year || yeTaxYear}`);
+      setYeStatus(res);
+    } catch (err) {
+      console.error('Year-end status error:', err);
+      setYeStatus(null);
+    }
+    setYeLoading(false);
+  };
+
+  const yeGenerate = async () => {
+    setYeGenerating(true);
+    setYeResult(null);
+    try {
+      const res = await adminFetch(`${YEAR_END_API_URL}/generate`, {
+        method: 'POST',
+        body: JSON.stringify({ tax_year: yeTaxYear }),
+      });
+      setYeResult(`Generated ${res.generated} of ${res.total} statements${res.failed > 0 ? ` (${res.failed} failed)` : ''}`);
+      yeLoadStatus();
+    } catch (err) {
+      setYeResult(`Error: ${err.message}`);
+    }
+    setYeGenerating(false);
+  };
+
+  const yeSendAll = async () => {
+    if (!confirm(`Send year-end statements to all donors for ${yeTaxYear}? This will email each donor their giving statement.`)) return;
+    setYeSending(true);
+    setYeResult(null);
+    try {
+      const res = await adminFetch(`${YEAR_END_API_URL}/send`, {
+        method: 'POST',
+        body: JSON.stringify({ tax_year: yeTaxYear }),
+      });
+      setYeResult(`Sent ${res.sent} of ${res.total} emails${res.failed > 0 ? ` (${res.failed} failed)` : ''}`);
+      yeLoadStatus();
+    } catch (err) {
+      setYeResult(`Error: ${err.message}`);
+    }
+    setYeSending(false);
+  };
+
+  const yeSendSingle = async (donorId) => {
+    try {
+      await adminFetch(`${YEAR_END_API_URL}/send-single`, {
+        method: 'POST',
+        body: JSON.stringify({ donor_id: donorId, tax_year: yeTaxYear }),
+      });
+      yeLoadStatus();
+    } catch (err) {
+      alert(`Failed to send: ${err.message}`);
+    }
+  };
+
+  const yeDownload = async (donorId) => {
+    try {
+      const path = `statements/${yeTaxYear}/${donorId}.pdf`;
+      const { data, error } = await supabase.storage.from('receipts').download(path);
+      if (error) throw error;
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Year-End-Statement-${yeTaxYear}-${donorId.substring(0, 8)}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(`Download failed: ${err.message}`);
+    }
+  };
 
   if (loading) return <div className="loading"><div className="spinner" />Loading compliance data...</div>;
   if (!data) return <div className="loading">Failed to load</div>;
@@ -1027,6 +1111,135 @@ function ComplianceView() {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      {/* Year-End Giving Statements */}
+      <div className="compliance-section">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h3 style={{ marginBottom: 0 }}>Year-End Giving Statements</h3>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <label style={{ color: '#8b8899', fontSize: 13 }}>Tax Year:</label>
+            <select
+              value={yeTaxYear}
+              onChange={e => { const yr = parseInt(e.target.value); setYeTaxYear(yr); setYeStatus(null); setYeResult(null); }}
+              style={{ background: '#1a1922', color: '#e8e6f0', border: '1px solid #2a2935', borderRadius: 6, padding: '6px 10px', fontSize: 13 }}
+            >
+              {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(yr => (
+                <option key={yr} value={yr}>{yr}</option>
+              ))}
+            </select>
+            <button className="btn btn-ghost btn-sm" onClick={() => yeLoadStatus()} disabled={yeLoading}>
+              {yeLoading ? 'Loading...' : 'Check Status'}
+            </button>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 24 }}>
+          {!yeStatus && !yeLoading && (
+            <p style={{ color: '#8b8899', textAlign: 'center', margin: 0 }}>
+              Select a tax year and click "Check Status" to view year-end statement progress.
+            </p>
+          )}
+          {yeLoading && <div style={{ textAlign: 'center', color: '#8b8899' }}>Loading status...</div>}
+
+          {yeStatus && (
+            <>
+              {/* Progress summary */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
+                <div style={{ background: '#1a1922', borderRadius: 8, padding: '16px 20px', textAlign: 'center' }}>
+                  <div style={{ color: '#8b8899', fontSize: 12, textTransform: 'uppercase', marginBottom: 6 }}>Total Donors</div>
+                  <div style={{ color: '#e8e6f0', fontSize: 28, fontWeight: 700 }}>{yeStatus.total_donors}</div>
+                </div>
+                <div style={{ background: '#1a1922', borderRadius: 8, padding: '16px 20px', textAlign: 'center' }}>
+                  <div style={{ color: '#8b8899', fontSize: 12, textTransform: 'uppercase', marginBottom: 6 }}>PDFs Generated</div>
+                  <div style={{ color: yeStatus.generated === yeStatus.total_donors ? '#4ade80' : '#c8a855', fontSize: 28, fontWeight: 700 }}>
+                    {yeStatus.generated}/{yeStatus.total_donors}
+                  </div>
+                </div>
+                <div style={{ background: '#1a1922', borderRadius: 8, padding: '16px 20px', textAlign: 'center' }}>
+                  <div style={{ color: '#8b8899', fontSize: 12, textTransform: 'uppercase', marginBottom: 6 }}>Emails Sent</div>
+                  <div style={{ color: yeStatus.sent === yeStatus.total_donors ? '#4ade80' : '#c8a855', fontSize: 28, fontWeight: 700 }}>
+                    {yeStatus.sent}/{yeStatus.total_donors}
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              {yeStatus.total_donors > 0 && (
+                <div style={{ background: '#1a1922', borderRadius: 4, height: 8, marginBottom: 20, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${(yeStatus.sent / yeStatus.total_donors) * 100}%`,
+                    background: yeStatus.sent === yeStatus.total_donors ? '#4ade80' : '#c8a855',
+                    borderRadius: 4,
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+                <button className="btn btn-gold" onClick={yeGenerate} disabled={yeGenerating || yeStatus.total_donors === 0}>
+                  {yeGenerating ? 'Generating...' : yeStatus.generated === yeStatus.total_donors && yeStatus.total_donors > 0
+                    ? 'Regenerate All PDFs' : 'Generate All PDFs'}
+                </button>
+                <button className="btn btn-gold" onClick={yeSendAll}
+                  disabled={yeSending || yeStatus.generated === 0 || yeStatus.sent === yeStatus.total_donors}
+                  style={yeStatus.generated === 0 ? { opacity: 0.5 } : {}}
+                >
+                  {yeSending ? 'Sending...' : 'Send All Emails'}
+                </button>
+              </div>
+
+              {/* Result message */}
+              {yeResult && (
+                <div className={`alert-banner ${yeResult.startsWith('Error') ? 'alert-danger' : 'alert-success'}`} style={{ marginBottom: 16 }}>
+                  {yeResult}
+                </div>
+              )}
+
+              {/* Donor table */}
+              {yeStatus.donors && yeStatus.donors.length > 0 && (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>Donor</th><th>Email</th><th>PDF</th><th>Emailed</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                      {yeStatus.donors.map(d => (
+                        <tr key={d.donor_id}>
+                          <td className="td-primary">{d.name}</td>
+                          <td>{d.email || '—'}</td>
+                          <td>
+                            <span className={`badge ${d.generated ? 'badge-green' : 'badge-red'}`}>
+                              {d.generated ? 'Ready' : 'Pending'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`badge ${d.sent ? 'badge-green' : 'badge-red'}`}>
+                              {d.sent ? 'Sent' : 'Not sent'}
+                            </span>
+                          </td>
+                          <td style={{ display: 'flex', gap: 6 }}>
+                            {d.generated && (
+                              <button className="btn btn-ghost btn-sm" onClick={() => yeDownload(d.donor_id)}>Download</button>
+                            )}
+                            {d.generated && !d.sent && d.email && (
+                              <button className="btn btn-gold btn-sm" onClick={() => yeSendSingle(d.donor_id)}>Send</button>
+                            )}
+                            {d.sent && (
+                              <button className="btn btn-ghost btn-sm" onClick={() => yeSendSingle(d.donor_id)}>Resend</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 
