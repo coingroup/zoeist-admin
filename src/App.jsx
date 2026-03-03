@@ -1,0 +1,1176 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { supabase, adminFetch } from './supabase';
+
+/* ═══════════════════════════════════════════
+   STYLES
+   ═══════════════════════════════════════════ */
+const STYLES = `
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0c0b0f; --bg-card: #16151b; --bg-hover: #1e1d25; --bg-input: #1a1922;
+    --border: #2a2935; --border-focus: #c8a855;
+    --text: #e8e6f0; --text-muted: #8b8899; --text-dim: #5d5b6a;
+    --gold: #c8a855; --gold-dim: rgba(200,168,85,0.15); --gold-text: #e0c872;
+    --green: #4ade80; --green-bg: rgba(74,222,128,0.1);
+    --red: #f87171; --red-bg: rgba(248,113,113,0.1);
+    --blue: #60a5fa; --blue-bg: rgba(96,165,250,0.1);
+    --font: 'DM Sans', -apple-system, sans-serif;
+    --mono: 'DM Mono', 'SF Mono', monospace;
+  }
+  html, body, #root { height: 100%; }
+  body { font-family: var(--font); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+  a { color: var(--gold-text); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  input, select, button { font-family: var(--font); }
+
+  /* Layout */
+  .layout { display: flex; height: 100vh; }
+  .sidebar {
+    width: 240px; background: var(--bg-card); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .sidebar-logo {
+    padding: 24px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .sidebar-logo .z-mark {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--gold), #a07c3a);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 16px;
+  }
+  .sidebar-logo h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
+  .sidebar-logo span { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+
+  .sidebar-nav { padding: 16px 12px; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .sidebar-nav a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 8px; font-size: 13.5px; font-weight: 500;
+    color: var(--text-muted); transition: all 0.15s;
+  }
+  .sidebar-nav a:hover { background: var(--bg-hover); color: var(--text); text-decoration: none; }
+  .sidebar-nav a.active { background: var(--gold-dim); color: var(--gold-text); }
+  .sidebar-nav a .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+
+  .sidebar-footer {
+    padding: 16px 20px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-dim);
+  }
+  .sidebar-footer .admin-name { color: var(--text-muted); font-weight: 500; }
+  .sidebar-footer button {
+    background: none; border: none; color: var(--text-dim); cursor: pointer;
+    font-size: 12px; padding: 4px 0; margin-top: 4px;
+  }
+  .sidebar-footer button:hover { color: var(--red); }
+
+  .main-content { flex: 1; overflow-y: auto; padding: 32px; }
+  .page-header { margin-bottom: 28px; }
+  .page-header h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.03em; }
+  .page-header p { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+  /* Cards */
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; transition: border-color 0.2s;
+  }
+  .card:hover { border-color: #3a3948; }
+  .card-title { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; margin-bottom: 8px; }
+  .card-value { font-size: 28px; font-weight: 700; letter-spacing: -0.03em; font-family: var(--mono); }
+  .card-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 1100px) { .charts-grid { grid-template-columns: 1fr; } }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 12px; color: var(--text-dim); font-size: 11px; font-weight: 600;
+       text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+  td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); }
+  tr:hover td { background: var(--bg-hover); }
+  .td-primary { color: var(--text); font-weight: 500; }
+  .td-mono { font-family: var(--mono); font-size: 12px; }
+
+  /* Badges */
+  .badge {
+    display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 11px;
+    font-weight: 600; letter-spacing: 0.02em;
+  }
+  .badge-green { background: var(--green-bg); color: var(--green); }
+  .badge-red { background: var(--red-bg); color: var(--red); }
+  .badge-blue { background: var(--blue-bg); color: var(--blue); }
+  .badge-gold { background: var(--gold-dim); color: var(--gold-text); }
+
+  /* Controls */
+  .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+  .controls input, .controls select {
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; outline: none;
+  }
+  .controls input:focus, .controls select:focus { border-color: var(--border-focus); }
+  .controls input { min-width: 220px; }
+
+  .btn {
+    padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    border: none; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-gold { background: var(--gold); color: #1a1a1a; }
+  .btn-gold:hover { background: #d4b45e; }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
+  .btn-ghost:hover { border-color: var(--gold); color: var(--gold-text); }
+  .btn-sm { padding: 5px 10px; font-size: 11px; }
+  .btn-danger { background: var(--red-bg); color: var(--red); border: 1px solid rgba(248,113,113,0.2); }
+
+  .pagination { display: flex; gap: 8px; align-items: center; margin-top: 16px; justify-content: center; }
+  .pagination button { padding: 6px 12px; }
+  .pagination span { font-size: 13px; color: var(--text-muted); }
+
+  /* Login */
+  .login-page {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg);
+  }
+  .login-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+    padding: 40px; width: 380px; max-width: 90vw;
+  }
+  .login-card h2 { font-size: 20px; font-weight: 700; margin-bottom: 24px; text-align: center; }
+  .login-card .z-mark-lg {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--gold), #a07c3a);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 22px; margin: 0 auto 16px;
+  }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
+  .form-group input {
+    width: 100%; background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 14px; border-radius: 8px; font-size: 14px; outline: none;
+  }
+  .form-group input:focus { border-color: var(--border-focus); }
+  .login-error { color: var(--red); font-size: 13px; margin-bottom: 12px; text-align: center; }
+  .login-btn { width: 100%; padding: 12px; font-size: 14px; margin-top: 8px; }
+
+  /* Alert banner */
+  .alert-banner {
+    padding: 12px 16px; border-radius: 10px; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500;
+  }
+  .alert-warning { background: rgba(200,168,85,0.1); border: 1px solid rgba(200,168,85,0.2); color: var(--gold-text); }
+  .alert-danger { background: var(--red-bg); border: 1px solid rgba(248,113,113,0.2); color: var(--red); }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px; width: 480px; max-width: 90vw; max-height: 85vh; overflow-y: auto;
+  }
+  .modal h3 { font-size: 17px; font-weight: 700; margin-bottom: 20px; }
+  .modal .form-group { margin-bottom: 14px; }
+  .modal .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 5px; font-weight: 500; }
+  .modal .form-group input, .modal .form-group select, .modal .form-group textarea {
+    width: 100%; background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    padding: 9px 12px; border-radius: 8px; font-size: 13px; outline: none; font-family: var(--font);
+  }
+  .modal .form-group textarea { min-height: 60px; resize: vertical; }
+  .modal .form-group input:focus, .modal .form-group select:focus, .modal .form-group textarea:focus { border-color: var(--border-focus); }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+  /* Loading */
+  .loading { display: flex; align-items: center; justify-content: center; padding: 60px; color: var(--text-dim); }
+  .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--gold); border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Compliance cards */
+  .compliance-section { margin-bottom: 32px; }
+  .compliance-section h3 { font-size: 15px; font-weight: 700; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .compliance-count { font-family: var(--mono); font-size: 13px; color: var(--gold-text); background: var(--gold-dim); padding: 2px 8px; border-radius: 6px; }
+`;
+
+/* ═══════════════════════════════════════════
+   HELPERS
+   ═══════════════════════════════════════════ */
+const fmt = (cents) => `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+const fmtK = (cents) => {
+  const val = cents / 100;
+  if (val >= 1000000) return `$${(val / 1000000).toFixed(1)}M`;
+  if (val >= 1000) return `$${(val / 1000).toFixed(1)}K`;
+  return `$${val.toFixed(0)}`;
+};
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+const fmtMonth = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+
+const CHART_GOLD = '#c8a855';
+const CHART_COLORS = ['#c8a855', '#60a5fa', '#4ade80', '#f87171', '#a78bfa', '#fb923c'];
+const PIE_COLORS = ['#c8a855', '#60a5fa', '#4ade80', '#f87171', '#a78bfa'];
+
+/* ═══════════════════════════════════════════
+   LOGIN PAGE
+   ═══════════════════════════════════════════ */
+function LoginPage({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const { data, error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+      if (authErr) throw authErr;
+      onLogin(data.session);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="z-mark-lg">Z</div>
+        <h2>Zoeist Admin</h2>
+        {error && <div className="login-error">{error}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Email</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@zoeist.org" required />
+          </div>
+          <div className="form-group">
+            <label>Password</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter password" required />
+          </div>
+          <button type="submit" className="btn btn-gold login-btn" disabled={loading}>
+            {loading ? 'Signing in...' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   OVERVIEW VIEW
+   ═══════════════════════════════════════════ */
+function OverviewView() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    adminFetch('overview').then(setData).catch(console.error).finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="loading"><div className="spinner" />Loading dashboard...</div>;
+  if (!data) return <div className="loading">Failed to load data</div>;
+
+  const { summary, monthly, recentDonations, topDonors, designations } = data;
+  const s = summary || {};
+
+  const monthlyChart = (monthly || []).slice().reverse().map(m => ({
+    month: fmtMonth(m.month),
+    amount: (m.total_cents || 0) / 100,
+    count: m.donation_count,
+  }));
+
+  const designationChart = (designations || []).map(d => ({
+    name: (d.designation || 'unrestricted').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    value: (d.total_cents || 0) / 100,
+    count: d.count,
+  }));
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Overview</h2>
+        <p>Real-time snapshot of your fundraising performance</p>
+      </div>
+
+      {(s.pending_receipts > 0) && (
+        <div className="alert-banner alert-warning">
+          ⚠ {s.pending_receipts} donation{s.pending_receipts > 1 ? 's' : ''} pending receipt — check Compliance tab
+        </div>
+      )}
+
+      <div className="kpi-grid">
+        <div className="card">
+          <div className="card-title">Total Raised</div>
+          <div className="card-value">{fmtK(s.total_amount_cents || 0)}</div>
+          <div className="card-sub">{s.total_donations || 0} donations</div>
+        </div>
+        <div className="card">
+          <div className="card-title">This Month</div>
+          <div className="card-value">{fmtK(s.this_month_cents || 0)}</div>
+          <div className="card-sub">{s.this_month_count || 0} donations</div>
+        </div>
+        <div className="card">
+          <div className="card-title">This Year</div>
+          <div className="card-value">{fmtK(s.this_year_cents || 0)}</div>
+          <div className="card-sub">{s.this_year_count || 0} donations</div>
+        </div>
+        <div className="card">
+          <div className="card-title">Avg Donation</div>
+          <div className="card-value">{fmt(s.avg_amount_cents || 0)}</div>
+          <div className="card-sub">{s.unique_donors || 0} unique donors</div>
+        </div>
+      </div>
+
+      <div className="charts-grid">
+        <div className="card">
+          <div className="card-title">Monthly Revenue</div>
+          <div style={{ height: 260, marginTop: 12 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthlyChart}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2a2935" />
+                <XAxis dataKey="month" stroke="#5d5b6a" fontSize={11} />
+                <YAxis stroke="#5d5b6a" fontSize={11} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(0)+'K' : v}`} />
+                <Tooltip
+                  contentStyle={{ background: '#1e1d25', border: '1px solid #2a2935', borderRadius: 8, fontSize: 12 }}
+                  formatter={(v) => [`$${v.toLocaleString()}`, 'Amount']}
+                />
+                <Bar dataKey="amount" fill={CHART_GOLD} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-title">By Designation</div>
+          <div style={{ height: 260, marginTop: 12 }}>
+            {designationChart.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={designationChart} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} innerRadius={50} paddingAngle={2} stroke="none">
+                    {designationChart.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={{ background: '#1e1d25', border: '1px solid #2a2935', borderRadius: 8, fontSize: 12 }} formatter={(v) => [`$${v.toLocaleString()}`]} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="loading" style={{ padding: 20 }}>No designation data yet</div>
+            )}
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center', marginTop: 8 }}>
+              {designationChart.map((d, i) => (
+                <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8b8899' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: PIE_COLORS[i % PIE_COLORS.length] }} />
+                  {d.name}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Recent Donations</div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Receipt</th><th>Donor</th><th>Amount</th><th>Date</th><th>Status</th><th>Receipt Sent</th></tr>
+            </thead>
+            <tbody>
+              {(recentDonations || []).slice(0, 8).map(d => (
+                <tr key={d.id}>
+                  <td className="td-mono">{d.receipt_number}</td>
+                  <td className="td-primary">{d.first_name} {d.last_name}</td>
+                  <td className="td-mono">{fmt(d.amount_cents)}</td>
+                  <td>{fmtDate(d.donated_at)}</td>
+                  <td><span className={`badge ${d.status === 'succeeded' ? 'badge-green' : d.status === 'refunded' ? 'badge-red' : 'badge-blue'}`}>{d.status}</span></td>
+                  <td>{d.thank_you_sent_at ? <span className="badge badge-green">Sent</span> : <span className="badge badge-red">Pending</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   DONATIONS VIEW
+   ═══════════════════════════════════════════ */
+function DonationsView() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ page, limit: 25 });
+    if (search) params.set('search', search);
+    if (status) params.set('status', status);
+    adminFetch(`donations?${params}`).then(setData).catch(console.error).finally(() => setLoading(false));
+  }, [page, search, status]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSearch = (e) => { e.preventDefault(); setPage(1); load(); };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const res = await adminFetch('export/donations');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `donations-${new Date().toISOString().split('T')[0]}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert(err.message); }
+    setExporting(false);
+  };
+
+  const handleResend = async (donationId) => {
+    if (!confirm('Resend receipt email for this donation?')) return;
+    try {
+      await adminFetch('resend-receipt', { method: 'POST', body: JSON.stringify({ donation_id: donationId }) });
+      alert('Receipt resent!');
+      load();
+    } catch (err) { alert(err.message); }
+  };
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Donations</h2>
+        <p>View and manage all donation records</p>
+      </div>
+
+      <div className="controls">
+        <form onSubmit={handleSearch} style={{ display: 'contents' }}>
+          <input placeholder="Search by name, email, receipt #..." value={search} onChange={e => setSearch(e.target.value)} />
+        </form>
+        <select value={status} onChange={e => { setStatus(e.target.value); setPage(1); }}>
+          <option value="">All statuses</option>
+          <option value="succeeded">Succeeded</option>
+          <option value="refunded">Refunded</option>
+          <option value="pending">Pending</option>
+        </select>
+        <div style={{ flex: 1 }} />
+        <button className="btn btn-ghost" onClick={handleExport} disabled={exporting}>
+          {exporting ? 'Exporting...' : '↓ Export CSV'}
+        </button>
+      </div>
+
+      {loading ? <div className="loading"><div className="spinner" />Loading...</div> : (
+        <>
+          <div className="card">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Receipt</th><th>Donor</th><th>Email</th><th>Amount</th><th>Type</th><th>Date</th><th>Status</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {(data?.donations || []).map(d => (
+                    <tr key={d.id}>
+                      <td className="td-mono">{d.receipt_number}</td>
+                      <td className="td-primary">{d.donor?.first_name} {d.donor?.last_name}</td>
+                      <td>{d.donor?.email}</td>
+                      <td className="td-mono">{fmt(d.amount_cents)}</td>
+                      <td><span className="badge badge-gold">{(d.designation || 'unrestricted').replace(/_/g, ' ')}</span></td>
+                      <td>{fmtDate(d.donated_at)}</td>
+                      <td><span className={`badge ${d.status === 'succeeded' ? 'badge-green' : 'badge-red'}`}>{d.status}</span></td>
+                      <td>
+                        {!d.thank_you_sent_at && d.status === 'succeeded' && (
+                          <button className="btn btn-ghost btn-sm" onClick={() => handleResend(d.id)}>Resend</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {(!data?.donations || data.donations.length === 0) && (
+                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: 32, color: '#5d5b6a' }}>No donations found</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {data && data.totalPages > 1 && (
+            <div className="pagination">
+              <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+              <span>Page {page} of {data.totalPages} ({data.total} total)</span>
+              <button className="btn btn-ghost btn-sm" disabled={page >= data.totalPages} onClick={() => setPage(p => p + 1)}>Next →</button>
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   DONORS VIEW
+   ═══════════════════════════════════════════ */
+function DonorDetailField({ label, value }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 11, color: '#5d5b6a', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 14, color: value ? '#e8e6f0' : '#5d5b6a' }}>{value || '—'}</div>
+    </div>
+  );
+}
+
+function DonorsView() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
+  const [selectedDonor, setSelectedDonor] = useState(null);
+  const [donorDetail, setDonorDetail] = useState(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ page, limit: 25, sort_by: 'total_donated_cents' });
+    if (search) params.set('search', search);
+    adminFetch(`donors?${params}`).then(setData).catch(console.error).finally(() => setLoading(false));
+  }, [page, search]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSearch = (e) => { e.preventDefault(); setPage(1); load(); };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const res = await adminFetch('export/donors');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `donors-${new Date().toISOString().split('T')[0]}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert(err.message); }
+    setExporting(false);
+  };
+
+  const openDonorDetail = async (donor) => {
+    setSelectedDonor(donor.id);
+    setLoadingDetail(true);
+    setEditing(false);
+    try {
+      const detail = await adminFetch(`donor/${donor.id}`);
+      setDonorDetail(detail);
+    } catch (err) {
+      console.error(err);
+      // Fallback: use the donor data we already have
+      setDonorDetail({ donor, donations: [] });
+    }
+    setLoadingDetail(false);
+  };
+
+  const startEdit = () => {
+    setEditForm({ ...donorDetail.donor });
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    try {
+      await adminFetch(`donor/${donorDetail.donor.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          first_name: editForm.first_name,
+          last_name: editForm.last_name,
+          email: editForm.email,
+          phone: editForm.phone,
+          address_line1: editForm.address_line1,
+          address_line2: editForm.address_line2,
+          city: editForm.city,
+          state: editForm.state,
+          zip: editForm.zip,
+          country: editForm.country,
+          employer: editForm.employer,
+          is_anonymous: editForm.is_anonymous,
+        })
+      });
+      // Refresh detail
+      const detail = await adminFetch(`donor/${donorDetail.donor.id}`);
+      setDonorDetail(detail);
+      setEditing(false);
+      load(); // refresh list too
+    } catch (err) { alert(err.message); }
+    setSaving(false);
+  };
+
+  const updateEdit = (field, value) => setEditForm(prev => ({ ...prev, [field]: value }));
+
+  const d = donorDetail?.donor;
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Donors</h2>
+        <p>View and manage your donor database</p>
+      </div>
+
+      <div className="controls">
+        <form onSubmit={handleSearch} style={{ display: 'contents' }}>
+          <input placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} />
+        </form>
+        <div style={{ flex: 1 }} />
+        <button className="btn btn-ghost" onClick={handleExport} disabled={exporting}>
+          {exporting ? 'Exporting...' : '↓ Export CSV'}
+        </button>
+      </div>
+
+      {loading ? <div className="loading"><div className="spinner" />Loading...</div> : (
+        <>
+          <div className="card">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Name</th><th>Email</th><th>Total Given</th><th>Donations</th><th>First Gift</th><th>Last Gift</th><th>Location</th></tr>
+                </thead>
+                <tbody>
+                  {(data?.donors || []).map(dn => (
+                    <tr key={dn.id} onClick={() => openDonorDetail(dn)} style={{ cursor: 'pointer', background: selectedDonor === dn.id ? 'var(--gold-dim)' : undefined }}>
+                      <td className="td-primary">{dn.first_name} {dn.last_name}</td>
+                      <td>{dn.email}</td>
+                      <td className="td-mono" style={{ fontWeight: 600, color: '#e0c872' }}>{fmt(dn.total_donated_cents || 0)}</td>
+                      <td className="td-mono">{dn.donation_count || 0}</td>
+                      <td>{fmtDate(dn.first_donated_at)}</td>
+                      <td>{fmtDate(dn.last_donated_at)}</td>
+                      <td>{[dn.city, dn.state].filter(Boolean).join(', ') || '—'}</td>
+                    </tr>
+                  ))}
+                  {(!data?.donors || data.donors.length === 0) && (
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: 32, color: '#5d5b6a' }}>No donors found</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {data && data.totalPages > 1 && (
+            <div className="pagination">
+              <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+              <span>Page {page} of {data.totalPages} ({data.total} total)</span>
+              <button className="btn btn-ghost btn-sm" disabled={page >= data.totalPages} onClick={() => setPage(p => p + 1)}>Next →</button>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Donor Detail Panel */}
+      {selectedDonor && (
+        <div className="modal-overlay" onClick={() => { setSelectedDonor(null); setDonorDetail(null); setEditing(false); }}>
+          <div className="modal" style={{ width: 620, maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
+            {loadingDetail ? (
+              <div className="loading"><div className="spinner" />Loading donor profile...</div>
+            ) : d ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 19 }}>{d.first_name} {d.last_name}</h3>
+                    <div style={{ fontSize: 12, color: '#8b8899', marginTop: 2 }}>{d.email}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {!editing && <button className="btn btn-gold btn-sm" onClick={startEdit}>Edit</button>}
+                    <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedDonor(null); setDonorDetail(null); setEditing(false); }}>×</button>
+                  </div>
+                </div>
+
+                {/* Summary badges */}
+                <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+                  <div style={{ background: 'var(--gold-dim)', padding: '8px 14px', borderRadius: 8 }}>
+                    <div style={{ fontSize: 10, color: '#8b8899', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total Given</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--mono)', color: '#e0c872' }}>{fmt(d.total_donated_cents || 0)}</div>
+                  </div>
+                  <div style={{ background: 'var(--bg-hover)', padding: '8px 14px', borderRadius: 8 }}>
+                    <div style={{ fontSize: 10, color: '#8b8899', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Donations</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--mono)' }}>{d.donation_count || 0}</div>
+                  </div>
+                  <div style={{ background: 'var(--bg-hover)', padding: '8px 14px', borderRadius: 8 }}>
+                    <div style={{ fontSize: 10, color: '#8b8899', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Donor Since</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3 }}>{fmtDate(d.first_donated_at)}</div>
+                  </div>
+                  {d.is_anonymous && <span className="badge badge-blue" style={{ alignSelf: 'center' }}>Anonymous</span>}
+                </div>
+
+                {editing ? (
+                  /* Edit Form */
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+                      <div className="form-group">
+                        <label>First Name</label>
+                        <input value={editForm.first_name || ''} onChange={e => updateEdit('first_name', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>Last Name</label>
+                        <input value={editForm.last_name || ''} onChange={e => updateEdit('last_name', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>Email</label>
+                        <input type="email" value={editForm.email || ''} onChange={e => updateEdit('email', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>Phone</label>
+                        <input value={editForm.phone || ''} onChange={e => updateEdit('phone', e.target.value)} />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label>Address Line 1</label>
+                        <input value={editForm.address_line1 || ''} onChange={e => updateEdit('address_line1', e.target.value)} />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label>Address Line 2</label>
+                        <input value={editForm.address_line2 || ''} onChange={e => updateEdit('address_line2', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>City</label>
+                        <input value={editForm.city || ''} onChange={e => updateEdit('city', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>State</label>
+                        <input value={editForm.state || ''} onChange={e => updateEdit('state', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>ZIP</label>
+                        <input value={editForm.zip || ''} onChange={e => updateEdit('zip', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>Country</label>
+                        <input value={editForm.country || ''} onChange={e => updateEdit('country', e.target.value)} placeholder="US" />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label>Employer</label>
+                        <input value={editForm.employer || ''} onChange={e => updateEdit('employer', e.target.value)} placeholder="For matching gift programs" />
+                      </div>
+                    </div>
+                    <div className="modal-actions">
+                      <button className="btn btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
+                      <button className="btn btn-gold" onClick={saveEdit} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button>
+                    </div>
+                  </>
+                ) : (
+                  /* Read-only Profile */
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
+                      <DonorDetailField label="Phone" value={d.phone} />
+                      <DonorDetailField label="Employer" value={d.employer} />
+                      <DonorDetailField label="Address" value={[d.address_line1, d.address_line2].filter(Boolean).join(', ') || null} />
+                      <DonorDetailField label="City, State ZIP" value={[d.city, d.state, d.zip].filter(Boolean).join(', ') || null} />
+                      <DonorDetailField label="Country" value={d.country} />
+                      <DonorDetailField label="Stripe Customer" value={d.stripe_customer_id} />
+                    </div>
+
+                    {/* Donation History */}
+                    <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                      <div className="card-title" style={{ marginBottom: 10 }}>Donation History</div>
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr><th>Receipt</th><th>Amount</th><th>Date</th><th>Status</th><th>Designation</th></tr>
+                          </thead>
+                          <tbody>
+                            {(donorDetail.donations || []).map(don => (
+                              <tr key={don.id}>
+                                <td className="td-mono">{don.receipt_number}</td>
+                                <td className="td-mono" style={{ fontWeight: 600 }}>{fmt(don.amount_cents)}</td>
+                                <td>{fmtDate(don.donated_at)}</td>
+                                <td><span className={`badge ${don.status === 'succeeded' ? 'badge-green' : 'badge-red'}`}>{don.status}</span></td>
+                                <td><span className="badge badge-gold">{(don.designation || 'unrestricted').replace(/_/g, ' ')}</span></td>
+                              </tr>
+                            ))}
+                            {(!donorDetail.donations || donorDetail.donations.length === 0) && (
+                              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 16, color: '#5d5b6a' }}>No donations recorded</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   COMPLIANCE VIEW
+   ═══════════════════════════════════════════ */
+function ComplianceView() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [resending, setResending] = useState(null);
+  const [modal, setModal] = useState(null); // { type: 'deadline'|'registration'|'filing', mode: 'create'|'edit', item?: object }
+  const [formData, setFormData] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const load = () => {
+    setLoading(true);
+    adminFetch('compliance').then(setData).catch(console.error).finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleResend = async (donationId) => {
+    setResending(donationId);
+    try {
+      await adminFetch('resend-receipt', { method: 'POST', body: JSON.stringify({ donation_id: donationId }) });
+      load();
+    } catch (err) { alert(err.message); }
+    setResending(null);
+  };
+
+  const openModal = (type, mode, item = null) => {
+    setModal({ type, mode });
+    if (mode === 'edit' && item) {
+      setFormData({ ...item });
+    } else {
+      // Defaults for new items
+      if (type === 'deadline') setFormData({ filing_name: '', description: '', deadline_date: '', status: 'upcoming' });
+      else if (type === 'registration') setFormData({ state: '', registration_number: '', status: 'active', expiration_date: '', notes: '' });
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const { type, mode } = modal;
+      let endpoint, method;
+      if (type === 'deadline') {
+        endpoint = mode === 'edit' ? `deadline/${formData.id}` : 'deadline';
+        method = mode === 'edit' ? 'PUT' : 'POST';
+      } else if (type === 'registration') {
+        endpoint = mode === 'edit' ? `state-registration/${formData.id}` : 'state-registration';
+        method = mode === 'edit' ? 'PUT' : 'POST';
+      } else if (type === 'filing') {
+        endpoint = `filing/${formData.id}`;
+        method = 'PUT';
+      }
+      // Clean out id for create, keep for update
+      const payload = { ...formData };
+      if (mode === 'create') { delete payload.id; delete payload.created_at; delete payload.updated_at; }
+      await adminFetch(endpoint, { method, body: JSON.stringify(payload) });
+      setModal(null);
+      load();
+    } catch (err) { alert(err.message); }
+    setSaving(false);
+  };
+
+  const handleDelete = async (type, id) => {
+    if (!confirm('Are you sure you want to delete this item?')) return;
+    try {
+      const endpoint = type === 'deadline' ? `deadline/${id}` : `state-registration/${id}`;
+      await adminFetch(endpoint, { method: 'DELETE' });
+      load();
+    } catch (err) { alert(err.message); }
+  };
+
+  const updateField = (field, value) => setFormData(prev => ({ ...prev, [field]: value }));
+
+  if (loading) return <div className="loading"><div className="spinner" />Loading compliance data...</div>;
+  if (!data) return <div className="loading">Failed to load</div>;
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Compliance</h2>
+        <p>IRS receipting, filing deadlines, and state registrations</p>
+      </div>
+
+      {(data.pendingCount > 0 || data.largeUnreceiptedCount > 0) && (
+        <div className="alert-banner alert-danger">
+          ⚠ Action required: {data.pendingCount || 0} pending receipt emails, {data.largeUnreceiptedCount || 0} large donations ({'>'}$250) without issued receipts
+        </div>
+      )}
+
+      {/* Pending Receipt Emails */}
+      <div className="compliance-section">
+        <h3>Pending Receipt Emails <span className="compliance-count">{data.pendingCount || 0}</span></h3>
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Receipt #</th><th>Donor</th><th>Email</th><th>Amount</th><th>Date</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {(data.pendingReceipts || []).map(d => (
+                  <tr key={d.id}>
+                    <td className="td-mono">{d.receipt_number}</td>
+                    <td className="td-primary">{d.donor?.first_name} {d.donor?.last_name}</td>
+                    <td>{d.donor?.email}</td>
+                    <td className="td-mono">{fmt(d.amount_cents)}</td>
+                    <td>{fmtDate(d.donated_at)}</td>
+                    <td>
+                      <button className="btn btn-gold btn-sm" onClick={() => handleResend(d.id)} disabled={resending === d.id}>
+                        {resending === d.id ? 'Sending...' : 'Send Receipt'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {(!data.pendingReceipts || data.pendingReceipts.length === 0) && (
+                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: 24, color: '#4ade80' }}>✓ All receipts sent</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Large Donations Without Receipts */}
+      <div className="compliance-section">
+        <h3>Large Donations Without Receipts (≥$250) <span className="compliance-count">{data.largeUnreceiptedCount || 0}</span></h3>
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Receipt #</th><th>Donor</th><th>Amount</th><th>Date</th></tr>
+              </thead>
+              <tbody>
+                {(data.largeUnreceipted || []).map(d => (
+                  <tr key={d.id}>
+                    <td className="td-mono">{d.receipt_number}</td>
+                    <td className="td-primary">{d.donor?.first_name} {d.donor?.last_name}</td>
+                    <td className="td-mono">{fmt(d.amount_cents)}</td>
+                    <td>{fmtDate(d.donated_at)}</td>
+                  </tr>
+                ))}
+                {(!data.largeUnreceipted || data.largeUnreceipted.length === 0) && (
+                  <tr><td colSpan={4} style={{ textAlign: 'center', padding: 24, color: '#4ade80' }}>✓ All large donations receipted</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Compliance Deadlines */}
+      <div className="compliance-section">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h3 style={{ marginBottom: 0 }}>Compliance Deadlines</h3>
+          <button className="btn btn-gold btn-sm" onClick={() => openModal('deadline', 'create')}>+ Add Deadline</button>
+        </div>
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Filing</th><th>Description</th><th>Due Date</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {(data.deadlines || []).map(d => {
+                  const isPast = new Date(d.deadline_date) < new Date();
+                  return (
+                    <tr key={d.id}>
+                      <td className="td-primary">{d.filing_name || d.name}</td>
+                      <td>{d.description || '—'}</td>
+                      <td style={isPast && d.status !== 'completed' ? { color: '#f87171', fontWeight: 600 } : {}}>{fmtDate(d.deadline_date)}</td>
+                      <td><span className={`badge ${d.status === 'completed' ? 'badge-green' : isPast ? 'badge-red' : 'badge-blue'}`}>{d.status || 'upcoming'}</span></td>
+                      <td style={{ display: 'flex', gap: 6 }}>
+                        {d.status !== 'completed' && (
+                          <button className="btn btn-ghost btn-sm" onClick={async () => {
+                            await adminFetch(`deadline/${d.id}`, { method: 'PUT', body: JSON.stringify({ status: 'completed' }) });
+                            load();
+                          }}>✓ Complete</button>
+                        )}
+                        <button className="btn btn-ghost btn-sm" onClick={() => openModal('deadline', 'edit', d)}>Edit</button>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete('deadline', d.id)}>×</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {(!data.deadlines || data.deadlines.length === 0) && (
+                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#5d5b6a' }}>No deadlines configured</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* State Registrations */}
+      <div className="compliance-section">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h3 style={{ marginBottom: 0 }}>State Registrations</h3>
+          <button className="btn btn-gold btn-sm" onClick={() => openModal('registration', 'create')}>+ Add Registration</button>
+        </div>
+        <div className="card">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>State</th><th>Registration #</th><th>Status</th><th>Expiration</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {(data.stateRegistrations || []).map(d => {
+                  const isExpired = d.expiration_date && new Date(d.expiration_date) < new Date();
+                  return (
+                    <tr key={d.id}>
+                      <td className="td-primary">{d.state}</td>
+                      <td className="td-mono">{d.registration_number || '—'}</td>
+                      <td><span className={`badge ${d.status === 'active' ? 'badge-green' : isExpired ? 'badge-red' : 'badge-blue'}`}>{d.status}</span></td>
+                      <td style={isExpired ? { color: '#f87171' } : {}}>{fmtDate(d.expiration_date)}</td>
+                      <td style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openModal('registration', 'edit', d)}>Edit</button>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete('registration', d.id)}>×</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {(!data.stateRegistrations || data.stateRegistrations.length === 0) && (
+                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#5d5b6a' }}>No state registrations configured</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Modal */}
+      {modal && (
+        <div className="modal-overlay" onClick={() => setModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{modal.mode === 'create' ? 'Add' : 'Edit'} {modal.type === 'deadline' ? 'Compliance Deadline' : 'State Registration'}</h3>
+
+            {modal.type === 'deadline' && (
+              <>
+                <div className="form-group">
+                  <label>Filing Name</label>
+                  <input value={formData.filing_name || ''} onChange={e => updateField('filing_name', e.target.value)} placeholder="e.g. IRS Form 990" />
+                </div>
+                <div className="form-group">
+                  <label>Description</label>
+                  <textarea value={formData.description || ''} onChange={e => updateField('description', e.target.value)} placeholder="Brief description..." />
+                </div>
+                <div className="form-group">
+                  <label>Due Date</label>
+                  <input type="date" value={formData.deadline_date?.split('T')[0] || ''} onChange={e => updateField('deadline_date', e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>Status</label>
+                  <select value={formData.status || 'upcoming'} onChange={e => updateField('status', e.target.value)}>
+                    <option value="upcoming">Upcoming</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="completed">Completed</option>
+                    <option value="overdue">Overdue</option>
+                  </select>
+                </div>
+              </>
+            )}
+
+            {modal.type === 'registration' && (
+              <>
+                <div className="form-group">
+                  <label>State</label>
+                  <input value={formData.state || ''} onChange={e => updateField('state', e.target.value)} placeholder="e.g. Georgia" />
+                </div>
+                <div className="form-group">
+                  <label>Registration Number</label>
+                  <input value={formData.registration_number || ''} onChange={e => updateField('registration_number', e.target.value)} placeholder="e.g. CH-12345" />
+                </div>
+                <div className="form-group">
+                  <label>Status</label>
+                  <select value={formData.status || 'active'} onChange={e => updateField('status', e.target.value)}>
+                    <option value="active">Active</option>
+                    <option value="pending">Pending</option>
+                    <option value="expired">Expired</option>
+                    <option value="exempt">Exempt</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Expiration Date</label>
+                  <input type="date" value={formData.expiration_date?.split('T')[0] || ''} onChange={e => updateField('expiration_date', e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>Notes</label>
+                  <textarea value={formData.notes || ''} onChange={e => updateField('notes', e.target.value)} placeholder="Any additional notes..." />
+                </div>
+              </>
+            )}
+
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   MAIN APP
+   ═══════════════════════════════════════════ */
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setChecking(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+  };
+
+  if (checking) return <div className="loading" style={{ height: '100vh' }}><div className="spinner" />Loading...</div>;
+
+  if (!session) return (
+    <>
+      <style>{STYLES}</style>
+      <LoginPage onLogin={setSession} />
+    </>
+  );
+
+  return (
+    <>
+      <style>{STYLES}</style>
+      <div className="layout">
+        <aside className="sidebar">
+          <div className="sidebar-logo">
+            <div className="z-mark">Z</div>
+            <div>
+              <h1>Zoeist Admin</h1>
+              <span>Donation Management</span>
+            </div>
+          </div>
+
+          <nav className="sidebar-nav">
+            <NavLink to="/" end><span className="nav-icon">◉</span> Overview</NavLink>
+            <NavLink to="/donations"><span className="nav-icon">◈</span> Donations</NavLink>
+            <NavLink to="/donors"><span className="nav-icon">◎</span> Donors</NavLink>
+            <NavLink to="/compliance"><span className="nav-icon">◇</span> Compliance</NavLink>
+          </nav>
+
+          <div className="sidebar-footer">
+            <div className="admin-name">{session.user?.email}</div>
+            <button onClick={handleLogout}>Sign out</button>
+          </div>
+        </aside>
+
+        <main className="main-content">
+          <Routes>
+            <Route path="/" element={<OverviewView />} />
+            <Route path="/donations" element={<DonationsView />} />
+            <Route path="/donors" element={<DonorsView />} />
+            <Route path="/compliance" element={<ComplianceView />} />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </main>
+      </div>
+    </>
+  );
+}
