@@ -8,6 +8,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export const ADMIN_API_URL = `${supabaseUrl}/functions/v1/admin-api`;
 export const YEAR_END_API_URL = `${supabaseUrl}/functions/v1/send-year-end-statements`;
 export const RECURRING_API_URL = `${supabaseUrl}/functions/v1/recurring-api`;
+export const COMPLIANCE_REPORTS_URL = `${supabaseUrl}/functions/v1/compliance-reports`;
+export const COMPLIANCE_ALERTS_URL = `${supabaseUrl}/functions/v1/compliance-alerts`;
+export const COMPLIANCE_FIN_STMT_URL = `${supabaseUrl}/functions/v1/compliance-financial-statement`;
 
 export async function adminFetch(path, options = {}) {
   const { data: { session } } = await supabase.auth.getSession();

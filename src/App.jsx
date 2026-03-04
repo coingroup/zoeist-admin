@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -821,6 +821,25 @@ function ComplianceView() {
   const [yeSending, setYeSending] = useState(false);
   const [yeResult, setYeResult] = useState(null); // last operation result message
 
+  // Compliance Automation state (Phase 9)
+  const [readinessTaxYear, setReadinessTaxYear] = useState(new Date().getFullYear());
+  const [readinessReport, setReadinessReport] = useState(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+
+  const [exportTaxYear, setExportTaxYear] = useState(new Date().getFullYear());
+  const [exporting990, setExporting990] = useState(false);
+  const [exportingSchedB, setExportingSchedB] = useState(false);
+  const [gaC200, setGaC200] = useState(null);
+  const [gaC200Loading, setGaC200Loading] = useState(false);
+
+  const [finStmtTaxYear, setFinStmtTaxYear] = useState(new Date().getFullYear());
+  const [finStmtGenerating, setFinStmtGenerating] = useState(false);
+  const [finStmtResult, setFinStmtResult] = useState(null);
+
+  const [alertsRunning, setAlertsRunning] = useState(false);
+  const [alertsResult, setAlertsResult] = useState(null);
+  const [recentAlerts, setRecentAlerts] = useState([]);
+
   const load = () => {
     setLoading(true);
     adminFetch('compliance').then(setData).catch(console.error).finally(() => setLoading(false));
@@ -957,6 +976,96 @@ function ComplianceView() {
       alert(`Download failed: ${err.message}`);
     }
   };
+
+  // ── Phase 9 Handlers ──
+  const runReadiness = async () => {
+    setReadinessLoading(true);
+    try {
+      const res = await adminFetch(`${COMPLIANCE_REPORTS_URL}/readiness?tax_year=${readinessTaxYear}`);
+      setReadinessReport(res);
+    } catch (err) { alert(err.message); }
+    setReadinessLoading(false);
+  };
+
+  const download990Csv = async () => {
+    setExporting990(true);
+    try {
+      const res = await adminFetch(`${COMPLIANCE_REPORTS_URL}/form990-csv?tax_year=${exportTaxYear}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `form990-data-${exportTaxYear}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert(err.message); }
+    setExporting990(false);
+  };
+
+  const downloadScheduleB = async () => {
+    setExportingSchedB(true);
+    try {
+      const res = await adminFetch(`${COMPLIANCE_REPORTS_URL}/schedule-b?tax_year=${exportTaxYear}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `schedule-b-${exportTaxYear}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert(err.message); }
+    setExportingSchedB(false);
+  };
+
+  const runGaC200Check = async () => {
+    setGaC200Loading(true);
+    try {
+      const res = await adminFetch(`${COMPLIANCE_REPORTS_URL}/ga-c200-check?tax_year=${exportTaxYear}`);
+      setGaC200(res);
+    } catch (err) { alert(err.message); }
+    setGaC200Loading(false);
+  };
+
+  const generateFinancialStatement = async () => {
+    setFinStmtGenerating(true);
+    setFinStmtResult(null);
+    try {
+      const res = await adminFetch(`${COMPLIANCE_FIN_STMT_URL}`, {
+        method: 'POST',
+        body: JSON.stringify({ tax_year: finStmtTaxYear }),
+      });
+      setFinStmtResult(res);
+    } catch (err) { setFinStmtResult({ error: err.message }); }
+    setFinStmtGenerating(false);
+  };
+
+  const downloadFinancialStatement = async () => {
+    try {
+      const path = `compliance/${finStmtTaxYear}/financial-statement.pdf`;
+      const { data: blob, error } = await supabase.storage.from('receipts').download(path);
+      if (error) throw error;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `financial-statement-${finStmtTaxYear}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert(`Download failed: ${err.message}`); }
+  };
+
+  const runAlertCheck = async () => {
+    setAlertsRunning(true);
+    setAlertsResult(null);
+    try {
+      const res = await adminFetch(`${COMPLIANCE_ALERTS_URL}`, { method: 'POST' });
+      setAlertsResult(res);
+    } catch (err) { setAlertsResult({ error: err.message }); }
+    setAlertsRunning(false);
+  };
+
+  const loadRecentAlerts = async () => {
+    try {
+      const { data: alerts } = await supabase
+        .from('compliance_alert_log')
+        .select('*, deadline:compliance_deadlines(filing_name)')
+        .order('sent_at', { ascending: false })
+        .limit(20);
+      setRecentAlerts(alerts || []);
+    } catch (err) { console.error('Failed to load alerts:', err); }
+  };
+
+  useEffect(() => { loadRecentAlerts(); }, []);
 
   if (loading) return <div className="loading"><div className="spinner" />Loading compliance data...</div>;
   if (!data) return <div className="loading">Failed to load</div>;
@@ -1239,6 +1348,220 @@ function ComplianceView() {
                 </div>
               )}
             </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Filing Readiness Report ── */}
+      <div className="compliance-section">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h3 style={{ marginBottom: 0 }}>Filing Readiness Report</h3>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <label style={{ color: '#8b8899', fontSize: 13 }}>Tax Year:</label>
+            <select
+              value={readinessTaxYear}
+              onChange={e => { setReadinessTaxYear(parseInt(e.target.value)); setReadinessReport(null); }}
+              style={{ background: '#1a1922', color: '#e8e6f0', border: '1px solid #2a2935', borderRadius: 6, padding: '6px 10px', fontSize: 13 }}
+            >
+              {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(yr => (
+                <option key={yr} value={yr}>{yr}</option>
+              ))}
+            </select>
+            <button className="btn btn-gold btn-sm" onClick={runReadiness} disabled={readinessLoading}>
+              {readinessLoading ? 'Checking...' : 'Run Check'}
+            </button>
+          </div>
+        </div>
+        <div className="card" style={{ padding: 24 }}>
+          {!readinessReport && !readinessLoading && (
+            <p style={{ color: '#8b8899', textAlign: 'center', margin: 0 }}>
+              Select a tax year and click "Run Check" to generate a filing readiness report.
+            </p>
+          )}
+          {readinessLoading && <div style={{ textAlign: 'center', color: '#8b8899' }}>Running readiness checks...</div>}
+          {readinessReport && (
+            <>
+              <div style={{ textAlign: 'center', marginBottom: 20 }}>
+                <span className={`badge ${readinessReport.overall_status === 'ready' ? 'badge-green' : readinessReport.overall_status === 'needs_attention' ? 'badge-gold' : 'badge-red'}`}
+                  style={{ fontSize: 14, padding: '6px 16px' }}>
+                  {readinessReport.overall_status === 'ready' ? 'Ready to File' : readinessReport.overall_status === 'needs_attention' ? 'Needs Attention' : 'Not Ready'}
+                </span>
+              </div>
+              <div style={{ display: 'grid', gap: 12 }}>
+                {readinessReport.checks.map(check => (
+                  <div key={check.id} style={{
+                    border: `1px solid ${check.severity === 'critical' ? 'rgba(248,113,113,0.3)' : check.severity === 'warning' ? 'rgba(200,168,85,0.3)' : check.severity === 'info' ? 'rgba(96,165,250,0.3)' : 'rgba(74,222,128,0.3)'}`,
+                    borderLeft: `4px solid ${check.severity === 'critical' ? '#f87171' : check.severity === 'warning' ? '#c8a855' : check.severity === 'info' ? '#60a5fa' : '#4ade80'}`,
+                    borderRadius: 8,
+                    padding: '14px 18px',
+                    background: 'var(--bg-hover)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 14 }}>{check.severity === 'critical' ? '!' : check.severity === 'warning' ? '!' : check.severity === 'pass' ? '\u2713' : 'i'}</span>
+                      <span style={{ fontWeight: 600, fontSize: 13, color: '#e8e6f0' }}>{check.title}</span>
+                      <span className={`badge ${check.severity === 'critical' ? 'badge-red' : check.severity === 'warning' ? 'badge-gold' : check.severity === 'info' ? 'badge-blue' : 'badge-green'}`} style={{ marginLeft: 'auto' }}>
+                        {check.severity === 'pass' ? 'OK' : check.severity}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#8b8899' }}>{check.message}</div>
+                    {check.action && <div style={{ fontSize: 11, color: '#5d5b6a', marginTop: 4 }}>{check.action}</div>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Form 990 Data Export ── */}
+      <div className="compliance-section">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h3 style={{ marginBottom: 0 }}>Form 990 Data Export</h3>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <label style={{ color: '#8b8899', fontSize: 13 }}>Tax Year:</label>
+            <select
+              value={exportTaxYear}
+              onChange={e => { setExportTaxYear(parseInt(e.target.value)); setGaC200(null); }}
+              style={{ background: '#1a1922', color: '#e8e6f0', border: '1px solid #2a2935', borderRadius: 6, padding: '6px 10px', fontSize: 13 }}
+            >
+              {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(yr => (
+                <option key={yr} value={yr}>{yr}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+            <button className="btn btn-gold" onClick={download990Csv} disabled={exporting990}>
+              {exporting990 ? 'Exporting...' : 'Download 990 Data (CSV)'}
+            </button>
+            <button className="btn btn-ghost" onClick={downloadScheduleB} disabled={exportingSchedB}>
+              {exportingSchedB ? 'Exporting...' : 'Download Schedule B (CSV)'}
+            </button>
+            <button className="btn btn-ghost" onClick={runGaC200Check} disabled={gaC200Loading}>
+              {gaC200Loading ? 'Checking...' : 'GA C-200 Check'}
+            </button>
+          </div>
+          {gaC200 && (
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+              <div className="card-title" style={{ marginBottom: 12 }}>Georgia C-200 Status</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                <div style={{ background: '#1a1922', borderRadius: 8, padding: '12px 16px' }}>
+                  <div style={{ fontSize: 11, color: '#8b8899', textTransform: 'uppercase' }}>Gross Receipts</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--mono)', color: '#e0c872', marginTop: 4 }}>
+                    ${gaC200.gross_receipts_dollars?.toLocaleString() || '0'}
+                  </div>
+                </div>
+                <div style={{ background: '#1a1922', borderRadius: 8, padding: '12px 16px' }}>
+                  <div style={{ fontSize: 11, color: '#8b8899', textTransform: 'uppercase' }}>GA Registration</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, marginTop: 6 }}>
+                    {gaC200.georgia_registration ? (
+                      <span className={`badge ${gaC200.georgia_registration.status === 'active' ? 'badge-green' : 'badge-red'}`}>
+                        {gaC200.georgia_registration.status}
+                      </span>
+                    ) : <span className="badge badge-red">Not Found</span>}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {gaC200.flags?.map((flag, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 14px', borderRadius: 6,
+                    background: flag.severity === 'critical' ? 'var(--red-bg)' : flag.severity === 'warning' ? 'var(--gold-dim)' : 'var(--blue-bg)',
+                    fontSize: 13,
+                    color: flag.severity === 'critical' ? '#f87171' : flag.severity === 'warning' ? '#e0c872' : '#60a5fa',
+                  }}>
+                    <span>{flag.severity === 'critical' ? '!' : flag.severity === 'warning' ? '!' : '\u2713'}</span>
+                    {flag.message}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Financial Statement (GA Renewal) ── */}
+      <div className="compliance-section">
+        <h3>Financial Statement (GA Renewal)</h3>
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+            <label style={{ color: '#8b8899', fontSize: 13 }}>Tax Year:</label>
+            <select
+              value={finStmtTaxYear}
+              onChange={e => { setFinStmtTaxYear(parseInt(e.target.value)); setFinStmtResult(null); }}
+              style={{ background: '#1a1922', color: '#e8e6f0', border: '1px solid #2a2935', borderRadius: 6, padding: '6px 10px', fontSize: 13 }}
+            >
+              {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(yr => (
+                <option key={yr} value={yr}>{yr}</option>
+              ))}
+            </select>
+            <button className="btn btn-gold" onClick={generateFinancialStatement} disabled={finStmtGenerating}>
+              {finStmtGenerating ? 'Generating...' : 'Generate PDF'}
+            </button>
+            {finStmtResult?.success && (
+              <button className="btn btn-ghost" onClick={downloadFinancialStatement}>Download PDF</button>
+            )}
+          </div>
+          {finStmtResult && (
+            finStmtResult.error ? (
+              <div className="alert-banner alert-danger">{finStmtResult.error}</div>
+            ) : (
+              <div className="alert-banner alert-success">
+                Financial statement generated for {finStmtResult.tax_year}. Revenue: ${(finStmtResult.total_revenue_cents / 100).toLocaleString()} from {finStmtResult.donation_count} donations.
+              </div>
+            )
+          )}
+          <p style={{ color: '#5d5b6a', fontSize: 12, margin: '12px 0 0' }}>
+            Generates a PDF financial statement pre-filled with revenue data for the Georgia Secretary of State C-200 annual registration renewal. Expense sections are marked for manual completion.
+          </p>
+        </div>
+      </div>
+
+      {/* ── Deadline Email Alerts ── */}
+      <div className="compliance-section">
+        <h3>Deadline Email Alerts</h3>
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+            <button className="btn btn-gold" onClick={runAlertCheck} disabled={alertsRunning}>
+              {alertsRunning ? 'Running...' : 'Run Alert Check Now'}
+            </button>
+            <span style={{ color: '#8b8899', fontSize: 12 }}>
+              Automated daily via cron. Sends alerts at 90, 60, 30, 14, and 7 days before deadlines.
+            </span>
+          </div>
+          {alertsResult && (
+            alertsResult.error ? (
+              <div className="alert-banner alert-danger">{alertsResult.error}</div>
+            ) : (
+              <div className="alert-banner alert-success">
+                {alertsResult.message}. {alertsResult.alerts_sent} alert{alertsResult.alerts_sent !== 1 ? 's' : ''} sent.
+              </div>
+            )
+          )}
+          {recentAlerts.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div className="card-title" style={{ marginBottom: 8 }}>Recent Alerts</div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Filing</th><th>Alert</th><th>Sent To</th><th>Sent At</th><th>Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {recentAlerts.map(a => (
+                      <tr key={a.id}>
+                        <td className="td-primary">{a.deadline?.filing_name || '—'}</td>
+                        <td className="td-mono">{a.alert_days} days</td>
+                        <td>{a.sent_to}</td>
+                        <td>{fmtDate(a.sent_at)}</td>
+                        <td><span className={`badge ${a.sendgrid_status === 'sent' ? 'badge-green' : 'badge-red'}`}>{a.sendgrid_status || '—'}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
         </div>
       </div>
