@@ -156,12 +156,12 @@ serve(async (req: Request) => {
 
       if (error || !recurring) return json({ error: 'Not found' }, 404);
 
-      // Fetch related donations (by stripe_subscription_id or donor_id + type)
+      // Fetch related donations (linked by notes field containing subscription ID)
       const { data: donations } = await supabase
         .from('donations')
         .select('*')
         .eq('donor_id', recurring.donor_id)
-        .eq('donation_type', 'recurring')
+        .like('notes', `recurring:${recurring.stripe_subscription_id}%`)
         .order('donated_at', { ascending: false })
         .limit(50);
 

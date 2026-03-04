@@ -157,23 +157,43 @@ async function handleCheckoutCompleted(supabase: any, session: any) {
     ? new Date(subscription.current_period_end * 1000).toISOString().split('T')[0]
     : null;
 
-  // Create recurring_donations record
-  const { error: recErr } = await supabase.from('recurring_donations').upsert({
-    donor_id: donorId,
-    stripe_subscription_id: subscriptionId,
-    stripe_price_id: priceId,
-    amount_cents: amountCents,
-    currency,
-    frequency,
-    designation,
-    status: 'active',
-    started_at: new Date().toISOString(),
-    next_billing_date: nextBilling,
-    installment_count: 0,
-  }, { onConflict: 'stripe_subscription_id' });
+  // Create recurring_donations record (check-then-insert to avoid needing UNIQUE constraint)
+  const { data: existingRec } = await supabase
+    .from('recurring_donations')
+    .select('id')
+    .eq('stripe_subscription_id', subscriptionId)
+    .maybeSingle();
 
-  if (recErr) console.error('Error creating recurring donation:', recErr);
-  else console.log(`Recurring donation created for ${email}, sub=${subscriptionId}`);
+  if (existingRec) {
+    // Update existing record
+    const { error: recErr } = await supabase.from('recurring_donations').update({
+      stripe_price_id: priceId,
+      amount_cents: amountCents,
+      currency,
+      frequency,
+      designation,
+      status: 'active',
+      next_billing_date: nextBilling,
+    }).eq('id', existingRec.id);
+    if (recErr) console.error('Error updating recurring donation:', recErr);
+    else console.log(`Recurring donation updated for ${email}, sub=${subscriptionId}`);
+  } else {
+    const { error: recErr } = await supabase.from('recurring_donations').insert({
+      donor_id: donorId,
+      stripe_subscription_id: subscriptionId,
+      stripe_price_id: priceId,
+      amount_cents: amountCents,
+      currency,
+      frequency,
+      designation,
+      status: 'active',
+      started_at: new Date().toISOString(),
+      next_billing_date: nextBilling,
+      installment_count: 0,
+    });
+    if (recErr) console.error('Error creating recurring donation:', JSON.stringify(recErr));
+    else console.log(`Recurring donation created for ${email}, sub=${subscriptionId}`);
+  }
 }
 
 // ─── invoice.payment_succeeded (each installment) ───
@@ -261,6 +281,8 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
   }
 
   // Create donation record
+  // Note: donation_type uses 'one_time' to satisfy CHECK constraint;
+  // recurring linkage is tracked via recurring_donations table + notes field
   const now = new Date().toISOString();
   const { data: donation, error: donErr } = await supabase.from('donations').insert({
     donor_id: donorId,
@@ -268,7 +290,7 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
     stripe_payment_intent_id: invoice.payment_intent,
     amount_cents: amountCents,
     currency: invoice.currency || 'usd',
-    donation_type: 'recurring',
+    donation_type: 'one_time',
     designation: recurring?.designation || 'unrestricted',
     status: 'succeeded',
     receipt_number: receiptNumber,
@@ -279,10 +301,11 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
     tax_deductible_amount_cents: amountCents,
     tax_year: taxYear,
     donated_at: now,
+    notes: `recurring:${subscriptionId}`,
   }).select('id').single();
 
   if (donErr) {
-    console.error('Error creating donation:', donErr);
+    console.error('Error creating donation:', JSON.stringify(donErr));
     return;
   }
 
