@@ -54,7 +54,7 @@ serve(async (req: Request) => {
     // Store in Supabase Storage
     const storagePath = `compliance/${tax_year}/financial-statement.pdf`;
     const { error: uploadErr } = await supabase.storage
-      .from('receipts')
+      .from('donation-receipts')
       .upload(storagePath, pdfBytes, { contentType: 'application/pdf', upsert: true });
 
     if (uploadErr) {

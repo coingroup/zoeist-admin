@@ -1036,7 +1036,7 @@ function ComplianceView() {
   const downloadFinancialStatement = async () => {
     try {
       const path = `compliance/${finStmtTaxYear}/financial-statement.pdf`;
-      const { data: blob, error } = await supabase.storage.from('receipts').download(path);
+      const { data: blob, error } = await supabase.storage.from('donation-receipts').download(path);
       if (error) throw error;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url; a.download = `financial-statement-${finStmtTaxYear}.pdf`; a.click();
