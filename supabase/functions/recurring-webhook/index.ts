@@ -100,9 +100,17 @@ serve(async (req: Request) => {
 
 // ─── checkout.session.completed (subscription mode) ───
 async function handleCheckoutCompleted(supabase: any, session: any) {
-  if (session.mode !== 'subscription') return; // Only handle subscription sessions
+  console.log(`[checkout] Session mode=${session.mode}, subscription=${session.subscription}, customer=${session.customer}`);
+  console.log(`[checkout] Keys: ${Object.keys(session).join(', ')}`);
+  if (session.mode !== 'subscription') {
+    console.log('[checkout] Skipping: not a subscription session');
+    return;
+  }
 
-  const subscriptionId = session.subscription;
+  // Extract subscription ID (newer Stripe API may nest it differently)
+  const subscriptionId = session.subscription
+    || session.parent?.subscription_details?.subscription
+    || null;
   const customerId = session.customer;
   const metadata = session.metadata || {};
   const subMetadata = session.subscription_data?.metadata || metadata;
@@ -113,8 +121,24 @@ async function handleCheckoutCompleted(supabase: any, session: any) {
   const designation = subMetadata.designation || metadata.designation || 'unrestricted';
   const frequency = subMetadata.frequency || metadata.frequency || 'monthly';
 
+  console.log(`[checkout] Resolved subscriptionId=${subscriptionId}, email=${email}, frequency=${frequency}`);
+
   if (!subscriptionId) {
-    console.error('No subscription ID in checkout session');
+    // Fallback: try to find subscription from Stripe customer
+    console.log('[checkout] No subscription ID found, attempting customer lookup');
+    if (customerId && email) {
+      try {
+        const subs = await stripeApi(`/subscriptions?customer=${customerId}&status=active&limit=1`);
+        if (subs.data?.[0]) {
+          const sub = subs.data[0];
+          console.log(`[checkout] Found subscription via customer: ${sub.id}`);
+          // Continue with this subscription below by recursing with patched session
+          session.subscription = sub.id;
+          return handleCheckoutCompleted(supabase, session);
+        }
+      } catch (e) { console.error('[checkout] Stripe subscription lookup failed:', e); }
+    }
+    console.error('[checkout] No subscription ID found anywhere');
     return;
   }
 
@@ -198,22 +222,74 @@ async function handleCheckoutCompleted(supabase: any, session: any) {
 
 // ─── invoice.payment_succeeded (each installment) ───
 async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice: any) {
-  // Only process subscription invoices
-  if (!invoice.subscription) return;
-  // Skip $0 invoices (e.g. trials)
-  if (invoice.amount_paid === 0) return;
+  // Debug: log parent and lines structure (Stripe moved subscription field in newer API)
+  console.log(`[invoice] id=${invoice.id}, amount_paid=${invoice.amount_paid}, billing_reason=${invoice.billing_reason}, customer=${invoice.customer}`);
+  console.log(`[invoice] parent=${JSON.stringify(invoice.parent)}`);
+  console.log(`[invoice] lines_first=${JSON.stringify(invoice.lines?.data?.[0]?.parent)}`);
+  console.log(`[invoice] charge=${invoice.charge}, payment_intent=${invoice.payment_intent}`);
 
-  const subscriptionId = invoice.subscription;
+  // Extract subscription ID from multiple possible locations (Stripe API version dependent)
+  const subId = invoice.subscription
+    || invoice.parent?.subscription_details?.subscription
+    || invoice.parent?.subscription
+    || invoice.lines?.data?.[0]?.parent?.subscription_item_details?.subscription
+    || invoice.lines?.data?.[0]?.subscription
+    || (invoice.billing_reason?.startsWith('subscription') ? invoice.lines?.data?.[0]?.parent?.subscription_details?.subscription : null)
+    || null;
+
+  console.log(`[invoice] Resolved subscription ID: ${subId}`);
+
+  // Only process subscription invoices (also allow billing_reason=subscription_*)
+  if (!subId && !invoice.billing_reason?.startsWith('subscription')) {
+    console.log('[invoice] Skipping: not a subscription invoice');
+    return;
+  }
+  // Skip $0 invoices (e.g. trials)
+  if (invoice.amount_paid === 0) {
+    console.log('[invoice] Skipping: amount_paid is 0');
+    return;
+  }
+
+  const subscriptionId = subId;
   const customerId = invoice.customer;
   const amountCents = invoice.amount_paid;
-  const chargeId = invoice.charge;
+  const chargeId = invoice.charge || invoice.payment_intent;
 
-  // Look up recurring donation
-  const { data: recurring } = await supabase
-    .from('recurring_donations')
-    .select('*, donors(*)')
-    .eq('stripe_subscription_id', subscriptionId)
-    .maybeSingle();
+  // Look up recurring donation — by subscription ID if available, otherwise by customer
+  let recurring = null;
+  let recLookupErr = null;
+
+  if (subscriptionId) {
+    const result = await supabase
+      .from('recurring_donations')
+      .select('*, donors(*)')
+      .eq('stripe_subscription_id', subscriptionId)
+      .maybeSingle();
+    recurring = result.data;
+    recLookupErr = result.error;
+  }
+
+  if (!recurring && customerId) {
+    // Fallback: find by customer's donor record
+    const { data: donor } = await supabase
+      .from('donors')
+      .select('id')
+      .eq('stripe_customer_id', customerId)
+      .maybeSingle();
+    if (donor) {
+      const result = await supabase
+        .from('recurring_donations')
+        .select('*, donors(*)')
+        .eq('donor_id', donor.id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      recurring = result.data;
+    }
+  }
+
+  console.log(`[invoice] Recurring lookup: found=${!!recurring}, subId=${subscriptionId}, error=${JSON.stringify(recLookupErr)}`);
 
   let donorId: string;
   let donor: any;
@@ -221,6 +297,7 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
   if (recurring) {
     donorId = recurring.donor_id;
     donor = recurring.donors;
+    console.log(`[invoice] Using recurring donor: ${donorId}`);
   } else {
     // Recurring record not found yet — look up by Stripe customer
     const { data: d } = await supabase
@@ -229,12 +306,14 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
       .eq('stripe_customer_id', customerId)
       .maybeSingle();
 
+    console.log(`[invoice] Donor by customer_id: found=${!!d}`);
+
     if (!d) {
       // Create donor from invoice data
       const email = invoice.customer_email || '';
       const name = invoice.customer_name || '';
       const parts = name.split(' ');
-      const { data: newDonor } = await supabase.from('donors').insert({
+      const { data: newDonor, error: newDonorErr } = await supabase.from('donors').insert({
         email,
         first_name: parts[0] || '',
         last_name: parts.slice(1).join(' ') || '',
@@ -243,6 +322,10 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
         total_donated_cents: 0,
         donation_count: 0,
       }).select('*').single();
+      if (newDonorErr) {
+        console.error(`[invoice] Failed to create donor: ${JSON.stringify(newDonorErr)}`);
+        return;
+      }
       donor = newDonor;
       donorId = newDonor.id;
     } else {
@@ -260,9 +343,11 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
     .maybeSingle();
 
   if (existingDonation) {
-    console.log(`Donation already exists for charge ${chargeId || invoiceId}`);
+    console.log(`[invoice] DUPLICATE — donation already exists for charge ${chargeId || invoiceId}`);
     return;
   }
+
+  console.log(`[invoice] No duplicate found. Creating donation for donor ${donorId}, amount=${amountCents}`);
 
   // Generate receipt number
   const taxYear = new Date().getFullYear();
@@ -298,7 +383,6 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
     payment_method: paymentMethod,
     card_last_four: cardLast4,
     card_brand: cardBrand,
-    tax_deductible_amount_cents: amountCents,
     tax_year: taxYear,
     donated_at: now,
     notes: `recurring:${subscriptionId}`,
@@ -320,18 +404,41 @@ async function handleInvoicePayment(supabase: any, supabaseUrl: string, invoice:
     updated_at: now,
   }).eq('id', donorId);
 
-  // Update recurring donation installment count
-  if (recurring) {
-    const subscription = await stripeApi(`/subscriptions/${subscriptionId}`);
-    const nextBilling = subscription.current_period_end
-      ? new Date(subscription.current_period_end * 1000).toISOString().split('T')[0]
-      : null;
+  // Update or create recurring_donations record
+  if (subscriptionId) {
+    try {
+      const subscription = await stripeApi(`/subscriptions/${subscriptionId}`);
+      const nextBilling = subscription.current_period_end
+        ? new Date(subscription.current_period_end * 1000).toISOString().split('T')[0]
+        : null;
 
-    await supabase.from('recurring_donations').update({
-      installment_count: (recurring.installment_count || 0) + 1,
-      next_billing_date: nextBilling,
-      updated_at: now,
-    }).eq('id', recurring.id);
+      if (recurring) {
+        await supabase.from('recurring_donations').update({
+          installment_count: (recurring.installment_count || 0) + 1,
+          next_billing_date: nextBilling,
+          updated_at: now,
+        }).eq('id', recurring.id);
+        console.log(`[invoice] Updated recurring_donations installment count`);
+      } else {
+        // Create recurring_donations record if checkout handler didn't
+        const subMeta = invoice.parent?.subscription_details?.metadata || {};
+        const { error: recErr } = await supabase.from('recurring_donations').insert({
+          donor_id: donorId,
+          stripe_subscription_id: subscriptionId,
+          stripe_price_id: subscription.items?.data?.[0]?.price?.id || null,
+          amount_cents: amountCents,
+          currency: invoice.currency || 'usd',
+          frequency: subMeta.frequency || 'monthly',
+          designation: subMeta.designation || 'unrestricted',
+          status: 'active',
+          started_at: now,
+          next_billing_date: nextBilling,
+          installment_count: 1,
+        });
+        if (recErr) console.error(`[invoice] Error creating recurring_donations: ${JSON.stringify(recErr)}`);
+        else console.log(`[invoice] Created recurring_donations record for sub=${subscriptionId}`);
+      }
+    } catch (e) { console.error('[invoice] Subscription update error:', e); }
   }
 
   // Trigger receipt generation + email (reuse existing pipeline)
