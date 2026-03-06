@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -1921,6 +1921,490 @@ function RecurringView() {
 }
 
 /* ═══════════════════════════════════════════
+   MATCHING GIFTS
+   ═══════════════════════════════════════════ */
+function MatchingView() {
+  const [stats, setStats] = useState(null);
+  const [matches, setMatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [tab, setTab] = useState('matches'); // 'matches' | 'eligible' | 'companies'
+  const [eligible, setEligible] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [showCreateModal, setShowCreateModal] = useState(null); // donation obj for creating match
+  const [showUpdateModal, setShowUpdateModal] = useState(null); // match obj for updating
+  const [showCompanyModal, setShowCompanyModal] = useState(null); // null=closed, {}=new, {id:..}=edit
+  const [formData, setFormData] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const loadStats = async () => {
+    try {
+      const data = await adminFetch(`${MATCHING_GIFTS_API_URL}/stats`);
+      setStats(data);
+    } catch (err) { console.error('Stats error:', err); }
+  };
+
+  const loadList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: '25' });
+      if (search) params.set('search', search);
+      if (statusFilter) params.set('status', statusFilter);
+      const data = await adminFetch(`${MATCHING_GIFTS_API_URL}/list?${params}`);
+      setMatches(data.matches || []);
+      setTotalPages(data.totalPages || 1);
+      setTotal(data.total || 0);
+    } catch (err) { console.error('List error:', err); }
+    setLoading(false);
+  }, [page, search, statusFilter]);
+
+  const loadEligible = async () => {
+    setLoading(true);
+    try {
+      const data = await adminFetch(`${MATCHING_GIFTS_API_URL}/eligible`);
+      setEligible(data.eligible || []);
+    } catch (err) { console.error('Eligible error:', err); }
+    setLoading(false);
+  };
+
+  const loadCompanies = async () => {
+    setLoading(true);
+    try {
+      const data = await adminFetch(`${MATCHING_GIFTS_API_URL}/companies`);
+      setCompanies(data.companies || []);
+    } catch (err) { console.error('Companies error:', err); }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadStats(); }, []);
+  useEffect(() => {
+    if (tab === 'matches') loadList();
+    else if (tab === 'eligible') loadEligible();
+    else if (tab === 'companies') loadCompanies();
+  }, [tab, loadList]);
+
+  const handleSearch = (e) => { e.preventDefault(); setPage(1); loadList(); };
+
+  const handleCreateMatch = async () => {
+    setSaving(true);
+    try {
+      await adminFetch(`${MATCHING_GIFTS_API_URL}/create`, {
+        method: 'POST',
+        body: JSON.stringify({
+          donation_id: showCreateModal.id,
+          company_name: formData.company_name || showCreateModal.donor?.employer || '',
+          match_ratio: formData.match_ratio ? parseFloat(formData.match_ratio) : 1.0,
+          match_amount_cents: formData.match_amount ? Math.round(parseFloat(formData.match_amount) * 100) : undefined,
+          notes: formData.notes,
+        }),
+      });
+      setShowCreateModal(null);
+      setFormData({});
+      loadStats();
+      if (tab === 'matches') loadList();
+      else loadEligible();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleUpdateMatch = async () => {
+    setSaving(true);
+    try {
+      const updates = {};
+      if (formData.status) updates.status = formData.status;
+      if (formData.match_amount) updates.match_amount_cents = Math.round(parseFloat(formData.match_amount) * 100);
+      if (formData.notes !== undefined) updates.notes = formData.notes;
+      if (formData.denial_reason) updates.denial_reason = formData.denial_reason;
+      if (formData.match_receipt_number) updates.match_receipt_number = formData.match_receipt_number;
+      await adminFetch(`${MATCHING_GIFTS_API_URL}/update/${showUpdateModal.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updates),
+      });
+      setShowUpdateModal(null);
+      setFormData({});
+      loadStats();
+      loadList();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleDeleteMatch = async (id) => {
+    if (!confirm('Delete this matching gift record?')) return;
+    try {
+      await adminFetch(`${MATCHING_GIFTS_API_URL}/delete/${id}`, { method: 'DELETE' });
+      loadStats();
+      loadList();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const handleSaveCompany = async () => {
+    setSaving(true);
+    try {
+      const body = {
+        company_name: formData.company_name,
+        match_ratio: formData.match_ratio ? parseFloat(formData.match_ratio) : 1.0,
+        max_match_cents: formData.max_match ? Math.round(parseFloat(formData.max_match) * 100) : null,
+        min_donation_cents: formData.min_donation ? Math.round(parseFloat(formData.min_donation) * 100) : 2500,
+        annual_max_cents: formData.annual_max ? Math.round(parseFloat(formData.annual_max) * 100) : null,
+        submission_deadline_months: formData.deadline_months ? parseInt(formData.deadline_months) : 12,
+        program_url: formData.program_url || null,
+        notes: formData.notes || null,
+        is_verified: formData.is_verified || false,
+      };
+      if (showCompanyModal.id) {
+        await adminFetch(`${MATCHING_GIFTS_API_URL}/companies/${showCompanyModal.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      } else {
+        await adminFetch(`${MATCHING_GIFTS_API_URL}/companies`, { method: 'POST', body: JSON.stringify(body) });
+      }
+      setShowCompanyModal(null);
+      setFormData({});
+      loadCompanies();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleDeleteCompany = async (id) => {
+    if (!confirm('Delete this company program?')) return;
+    try {
+      await adminFetch(`${MATCHING_GIFTS_API_URL}/companies/${id}`, { method: 'DELETE' });
+      loadCompanies();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const statusBadge = (s) => {
+    const cls = { identified: 'badge-blue', submitted: 'badge-gold', approved: 'badge-green', received: 'badge-green', denied: 'badge-red', expired: 'badge-red' }[s] || 'badge-blue';
+    return <span className={`badge ${cls}`}>{s}</span>;
+  };
+
+  const tabStyle = (t) => ({
+    padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none',
+    background: tab === t ? 'var(--gold-dim)' : 'transparent', color: tab === t ? 'var(--gold-text)' : 'var(--text-muted)',
+  });
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Matching Gifts</h2>
+        <p>Track employer matching gift programs and submissions</p>
+      </div>
+
+      {/* Stats Cards */}
+      {stats && (
+        <div className="kpi-grid" style={{ marginBottom: 24 }}>
+          <div className="card">
+            <div className="card-title">Pipeline</div>
+            <div className="card-value">{stats.identified + stats.submitted + stats.approved}</div>
+            <div className="card-sub">{stats.identified} identified, {stats.submitted} submitted, {stats.approved} approved</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Pending Match Value</div>
+            <div className="card-value">{fmt(stats.total_pending_cents || 0)}</div>
+            <div className="card-sub">Awaiting employer payment</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Received</div>
+            <div className="card-value" style={{ color: 'var(--green)' }}>{fmt(stats.total_received_cents || 0)}</div>
+            <div className="card-sub">{stats.received} match{stats.received !== 1 ? 'es' : ''} collected</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Companies</div>
+            <div className="card-value">{stats.companies}</div>
+            <div className="card-sub">{stats.denied} denied, {stats.expired} expired</div>
+          </div>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+        <button style={tabStyle('matches')} onClick={() => setTab('matches')}>All Matches ({total})</button>
+        <button style={tabStyle('eligible')} onClick={() => setTab('eligible')}>Eligible Donations</button>
+        <button style={tabStyle('companies')} onClick={() => setTab('companies')}>Company Programs</button>
+      </div>
+
+      {/* MATCHES TAB */}
+      {tab === 'matches' && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '16px 20px' }}>
+              <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8, flex: 1 }}>
+                <input placeholder="Search by company name..." value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1 }} />
+                <button className="btn btn-gold btn-sm" type="submit">Search</button>
+              </form>
+              <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+                style={{ background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
+                <option value="">All Statuses</option>
+                <option value="identified">Identified</option>
+                <option value="submitted">Submitted</option>
+                <option value="approved">Approved</option>
+                <option value="received">Received</option>
+                <option value="denied">Denied</option>
+                <option value="expired">Expired</option>
+              </select>
+            </div>
+          </div>
+          <div className="card">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Donor</th>
+                    <th>Employer</th>
+                    <th>Original</th>
+                    <th>Match Amount</th>
+                    <th>Ratio</th>
+                    <th>Status</th>
+                    <th>Receipt #</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>}
+                  {!loading && matches.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No matching gifts found</td></tr>}
+                  {!loading && matches.map(m => (
+                    <tr key={m.id}>
+                      <td className="td-primary">{m.donor ? `${m.donor.first_name} ${m.donor.last_name}` : '—'}</td>
+                      <td>{m.company_name}</td>
+                      <td className="td-mono">{fmt(m.original_amount_cents)}</td>
+                      <td className="td-mono" style={{ color: 'var(--green)' }}>{fmt(m.match_amount_cents)}</td>
+                      <td className="td-mono">{m.match_ratio}x</td>
+                      <td>{statusBadge(m.status)}</td>
+                      <td className="td-mono">{m.donation?.receipt_number || '—'}</td>
+                      <td onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => { setShowUpdateModal(m); setFormData({ status: m.status, notes: m.notes || '', match_receipt_number: m.match_receipt_number || '' }); }}>Update</button>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleDeleteMatch(m.id)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {totalPages > 1 && (
+              <div className="pagination">
+                <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button>
+                <span>Page {page} of {totalPages} ({total} total)</span>
+                <button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ELIGIBLE TAB */}
+      {tab === 'eligible' && (
+        <div className="card">
+          <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 13 }}>
+            Donations from donors with an employer on file that don't yet have a matching gift record.
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Donor</th><th>Employer</th><th>Amount</th><th>Receipt #</th><th>Date</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                {loading && <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>}
+                {!loading && eligible.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No eligible donations found</td></tr>}
+                {!loading && eligible.map(d => (
+                  <tr key={d.id}>
+                    <td className="td-primary">{d.donor ? `${d.donor.first_name} ${d.donor.last_name}` : '—'}</td>
+                    <td>{d.donor?.employer || '—'}</td>
+                    <td className="td-mono">{fmt(d.amount_cents)}</td>
+                    <td className="td-mono">{d.receipt_number || '—'}</td>
+                    <td>{fmtDate(d.donated_at)}</td>
+                    <td>
+                      <button className="btn btn-gold btn-sm" onClick={() => { setShowCreateModal(d); setFormData({ company_name: d.donor?.employer || '', match_ratio: '1.0' }); }}>
+                        Create Match
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* COMPANIES TAB */}
+      {tab === 'companies' && (
+        <div className="card">
+          <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Known employer matching gift programs</span>
+            <button className="btn btn-gold btn-sm" onClick={() => { setShowCompanyModal({}); setFormData({ match_ratio: '1.0', deadline_months: '12' }); }}>Add Company</button>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Company</th><th>Match Ratio</th><th>Max Match</th><th>Min Donation</th><th>Annual Max</th><th>Deadline</th><th>Verified</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {loading && <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>}
+                {!loading && companies.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No companies added yet</td></tr>}
+                {!loading && companies.map(c => (
+                  <tr key={c.id}>
+                    <td className="td-primary">{c.company_name}</td>
+                    <td className="td-mono">{c.match_ratio}x</td>
+                    <td className="td-mono">{c.max_match_cents ? fmt(c.max_match_cents) : 'No limit'}</td>
+                    <td className="td-mono">{fmt(c.min_donation_cents || 0)}</td>
+                    <td className="td-mono">{c.annual_max_cents ? fmt(c.annual_max_cents) : 'No limit'}</td>
+                    <td>{c.submission_deadline_months || 12} months</td>
+                    <td>{c.is_verified ? <span className="badge badge-green">Verified</span> : <span className="badge badge-blue">Unverified</span>}</td>
+                    <td onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => {
+                        setShowCompanyModal(c);
+                        setFormData({
+                          company_name: c.company_name, match_ratio: String(c.match_ratio),
+                          max_match: c.max_match_cents ? (c.max_match_cents / 100).toFixed(2) : '',
+                          min_donation: c.min_donation_cents ? (c.min_donation_cents / 100).toFixed(2) : '',
+                          annual_max: c.annual_max_cents ? (c.annual_max_cents / 100).toFixed(2) : '',
+                          deadline_months: String(c.submission_deadline_months || 12),
+                          program_url: c.program_url || '', notes: c.notes || '', is_verified: c.is_verified,
+                        });
+                      }}>Edit</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => handleDeleteCompany(c.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE MATCH MODAL */}
+      {showCreateModal && (
+        <div className="modal-overlay" onClick={() => setShowCreateModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Create Matching Gift</h3>
+            <div style={{ marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 8, fontSize: 13, color: 'var(--text-muted)' }}>
+              <strong style={{ color: 'var(--text)' }}>{showCreateModal.donor?.first_name} {showCreateModal.donor?.last_name}</strong> donated <strong style={{ color: 'var(--green)' }}>{fmt(showCreateModal.amount_cents)}</strong> ({showCreateModal.receipt_number})
+            </div>
+            <div className="form-group">
+              <label>Employer / Company</label>
+              <input value={formData.company_name || ''} onChange={e => setFormData({ ...formData, company_name: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Match Ratio</label>
+              <input type="number" step="0.01" min="0" value={formData.match_ratio || ''} onChange={e => setFormData({ ...formData, match_ratio: e.target.value })} placeholder="1.0 = dollar for dollar" />
+            </div>
+            <div className="form-group">
+              <label>Match Amount ($ override, leave blank to auto-calculate)</label>
+              <input type="number" step="0.01" min="0" value={formData.match_amount || ''} onChange={e => setFormData({ ...formData, match_amount: e.target.value })} placeholder="Auto-calculated from ratio" />
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} />
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowCreateModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleCreateMatch} disabled={saving || !formData.company_name}>{saving ? 'Creating...' : 'Create Match'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* UPDATE MATCH MODAL */}
+      {showUpdateModal && (
+        <div className="modal-overlay" onClick={() => setShowUpdateModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Update Matching Gift</h3>
+            <div style={{ marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 8, fontSize: 13, color: 'var(--text-muted)' }}>
+              <strong style={{ color: 'var(--text)' }}>{showUpdateModal.company_name}</strong> — {fmt(showUpdateModal.original_amount_cents)} donation, {fmt(showUpdateModal.match_amount_cents)} match
+            </div>
+            <div className="form-group">
+              <label>Status</label>
+              <select value={formData.status || ''} onChange={e => setFormData({ ...formData, status: e.target.value })}>
+                <option value="identified">Identified</option>
+                <option value="submitted">Submitted</option>
+                <option value="approved">Approved</option>
+                <option value="received">Received</option>
+                <option value="denied">Denied</option>
+                <option value="expired">Expired</option>
+              </select>
+            </div>
+            {formData.status === 'received' && (
+              <div className="form-group">
+                <label>Match Receipt / Check Number</label>
+                <input value={formData.match_receipt_number || ''} onChange={e => setFormData({ ...formData, match_receipt_number: e.target.value })} />
+              </div>
+            )}
+            {formData.status === 'denied' && (
+              <div className="form-group">
+                <label>Denial Reason</label>
+                <input value={formData.denial_reason || ''} onChange={e => setFormData({ ...formData, denial_reason: e.target.value })} />
+              </div>
+            )}
+            <div className="form-group">
+              <label>Match Amount ($)</label>
+              <input type="number" step="0.01" min="0" value={formData.match_amount || (showUpdateModal.match_amount_cents / 100).toFixed(2)} onChange={e => setFormData({ ...formData, match_amount: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} />
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowUpdateModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleUpdateMatch} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* COMPANY MODAL */}
+      {showCompanyModal && (
+        <div className="modal-overlay" onClick={() => setShowCompanyModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{showCompanyModal.id ? 'Edit Company Program' : 'Add Company Program'}</h3>
+            <div className="form-group">
+              <label>Company Name</label>
+              <input value={formData.company_name || ''} onChange={e => setFormData({ ...formData, company_name: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Match Ratio (1.0 = 1:1)</label>
+              <input type="number" step="0.01" min="0" value={formData.match_ratio || ''} onChange={e => setFormData({ ...formData, match_ratio: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Max Match per Donation ($, leave blank for no limit)</label>
+              <input type="number" step="0.01" min="0" value={formData.max_match || ''} onChange={e => setFormData({ ...formData, max_match: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Min Donation ($)</label>
+              <input type="number" step="0.01" min="0" value={formData.min_donation || ''} onChange={e => setFormData({ ...formData, min_donation: e.target.value })} placeholder="25.00" />
+            </div>
+            <div className="form-group">
+              <label>Annual Max ($, leave blank for no limit)</label>
+              <input type="number" step="0.01" min="0" value={formData.annual_max || ''} onChange={e => setFormData({ ...formData, annual_max: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Submission Deadline (months after donation)</label>
+              <input type="number" min="1" value={formData.deadline_months || ''} onChange={e => setFormData({ ...formData, deadline_months: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Program URL</label>
+              <input value={formData.program_url || ''} onChange={e => setFormData({ ...formData, program_url: e.target.value })} placeholder="https://..." />
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} />
+            </div>
+            <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={formData.is_verified || false} onChange={e => setFormData({ ...formData, is_verified: e.target.checked })} style={{ width: 'auto' }} />
+              <label style={{ margin: 0 }}>Verified program</label>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowCompanyModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSaveCompany} disabled={saving || !formData.company_name}>{saving ? 'Saving...' : (showCompanyModal.id ? 'Save' : 'Add Company')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════ */
 export default function App() {
@@ -1971,6 +2455,7 @@ export default function App() {
             <NavLink to="/donors"><span className="nav-icon">◎</span> Donors</NavLink>
             <NavLink to="/recurring"><span className="nav-icon">↻</span> Recurring</NavLink>
             <NavLink to="/compliance"><span className="nav-icon">◇</span> Compliance</NavLink>
+            <NavLink to="/matching"><span className="nav-icon">⬡</span> Matching</NavLink>
           </nav>
 
           <div className="sidebar-footer">
@@ -1986,6 +2471,7 @@ export default function App() {
             <Route path="/donors" element={<DonorsView />} />
             <Route path="/recurring" element={<RecurringView />} />
             <Route path="/compliance" element={<ComplianceView />} />
+            <Route path="/matching" element={<MatchingView />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>
