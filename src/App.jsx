@@ -215,18 +215,22 @@ const parseCents = (v) => {
 };
 
 // Dollar input: shows $ prefix, accepts commas/decimals, stores raw string
-function DollarInput({ value, onChange, placeholder, ...props }) {
+function DollarInput({ value, onChange, placeholder }) {
+  const handleChange = (e) => {
+    const raw = e.target.value;
+    // Allow digits, commas, periods, and empty
+    const filtered = raw.replace(/[^0-9,.]/g, '');
+    onChange(filtered);
+  };
   return (
-    <div style={{ position: 'relative' }}>
-      <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)', fontSize: 13, pointerEvents: 'none' }}>$</span>
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+      <span style={{ position: 'absolute', left: 12, color: 'var(--text-dim)', fontSize: 13, pointerEvents: 'none', zIndex: 1 }}>$</span>
       <input
         type="text"
-        inputMode="decimal"
         value={value || ''}
-        onChange={e => onChange(e.target.value)}
+        onChange={handleChange}
         placeholder={placeholder || '0.00'}
-        style={{ paddingLeft: 24, width: '100%' }}
-        {...props}
+        style={{ paddingLeft: 24, width: '100%', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '9px 12px 9px 24px', borderRadius: 8, fontSize: 13, outline: 'none', fontFamily: 'var(--font)' }}
       />
     </div>
   );
