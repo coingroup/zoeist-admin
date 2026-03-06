@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL, FUNDRAISING_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -2903,6 +2903,485 @@ function EventsView() {
 }
 
 /* ═══════════════════════════════════════════
+   FUNDRAISING: PLEDGES, IN-KIND, GRANTS, UTM
+   ═══════════════════════════════════════════ */
+function FundraisingView() {
+  const [stats, setStats] = useState(null);
+  const [tab, setTab] = useState('pledges');
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [showModal, setShowModal] = useState(null);
+  const [formData, setFormData] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [donors, setDonors] = useState([]);
+  const [utmData, setUtmData] = useState(null);
+
+  const loadStats = async () => {
+    try { setStats(await adminFetch(`${FUNDRAISING_API_URL}/stats`)); } catch (err) { console.error(err); }
+  };
+
+  const loadDonors = async () => {
+    try { const d = await adminFetch(`${FUNDRAISING_API_URL}/donors-list`); setDonors(d.donors || []); } catch (err) { console.error(err); }
+  };
+
+  const loadItems = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: '25' });
+      if (statusFilter) params.set('status', statusFilter);
+      if (tab === 'pledges') {
+        const d = await adminFetch(`${FUNDRAISING_API_URL}/pledges?${params}`);
+        setItems(d.pledges || []); setTotal(d.total || 0); setTotalPages(d.totalPages || 1);
+      } else if (tab === 'in-kind') {
+        const d = await adminFetch(`${FUNDRAISING_API_URL}/in-kind?${params}`);
+        setItems(d.donations || []); setTotal(d.total || 0); setTotalPages(d.totalPages || 1);
+      } else if (tab === 'grants') {
+        const d = await adminFetch(`${FUNDRAISING_API_URL}/grants?${params}`);
+        setItems(d.grants || []); setTotal(d.total || 0); setTotalPages(d.totalPages || 1);
+      } else if (tab === 'utm') {
+        const d = await adminFetch(`${FUNDRAISING_API_URL}/utm-report`);
+        setUtmData(d);
+      }
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  }, [tab, page, statusFilter]);
+
+  useEffect(() => { loadStats(); loadDonors(); }, []);
+  useEffect(() => { setPage(1); setStatusFilter(''); }, [tab]);
+  useEffect(() => { loadItems(); }, [loadItems]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (tab === 'pledges') {
+        const body = {
+          donor_id: formData.donor_id,
+          total_pledge_cents: parseCents(formData.total_pledge),
+          installment_count: formData.installment_count ? parseInt(formData.installment_count) : null,
+          installment_amount_cents: formData.installment_amount ? parseCents(formData.installment_amount) : null,
+          frequency: formData.frequency || null,
+          designation: formData.designation || 'unrestricted',
+          start_date: formData.start_date,
+          next_payment_date: formData.next_payment_date || formData.start_date,
+          end_date: formData.end_date || null,
+          notes: formData.notes || null,
+        };
+        if (showModal.id) {
+          body.paid_to_date_cents = formData.paid_to_date ? parseCents(formData.paid_to_date) : undefined;
+          body.status = formData.status;
+          await adminFetch(`${FUNDRAISING_API_URL}/pledge/${showModal.id}`, { method: 'PUT', body: JSON.stringify(body) });
+        } else {
+          await adminFetch(`${FUNDRAISING_API_URL}/pledge`, { method: 'POST', body: JSON.stringify(body) });
+        }
+      } else if (tab === 'in-kind') {
+        const body = {
+          donor_id: formData.donor_id,
+          description: formData.description,
+          category: formData.category || 'other',
+          estimated_value_cents: parseCents(formData.estimated_value),
+          valuation_method: formData.valuation_method || null,
+          appraiser_name: formData.appraiser_name || null,
+          donated_at: formData.donated_at || undefined,
+          tax_year: formData.tax_year ? parseInt(formData.tax_year) : new Date().getFullYear(),
+          notes: formData.notes || null,
+        };
+        if (showModal.id) {
+          body.form_8283_signed = formData.form_8283_signed || false;
+          await adminFetch(`${FUNDRAISING_API_URL}/in-kind/${showModal.id}`, { method: 'PUT', body: JSON.stringify(body) });
+        } else {
+          await adminFetch(`${FUNDRAISING_API_URL}/in-kind`, { method: 'POST', body: JSON.stringify(body) });
+        }
+      } else if (tab === 'grants') {
+        const body = {
+          funder_name: formData.funder_name,
+          funder_contact_email: formData.funder_contact_email || null,
+          award_amount_cents: parseCents(formData.award_amount),
+          restriction_type: formData.restriction_type || 'unrestricted',
+          purpose: formData.purpose || null,
+          program: formData.program || null,
+          grant_period_start: formData.grant_period_start || null,
+          grant_period_end: formData.grant_period_end || null,
+          reporting_frequency: formData.reporting_frequency || null,
+          next_report_due: formData.next_report_due || null,
+          deliverables: formData.deliverables || null,
+          notes: formData.notes || null,
+        };
+        if (showModal.id) {
+          body.spent_to_date_cents = formData.spent_to_date ? parseCents(formData.spent_to_date) : undefined;
+          body.status = formData.status;
+          await adminFetch(`${FUNDRAISING_API_URL}/grant/${showModal.id}`, { method: 'PUT', body: JSON.stringify(body) });
+        } else {
+          await adminFetch(`${FUNDRAISING_API_URL}/grant`, { method: 'POST', body: JSON.stringify(body) });
+        }
+      }
+      setShowModal(null); setFormData({}); loadStats(); loadItems();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleDelete = async (id) => {
+    const endpoint = tab === 'pledges' ? 'pledge' : tab === 'in-kind' ? 'in-kind' : 'grant';
+    if (!confirm(`Delete this ${endpoint}?`)) return;
+    try {
+      await adminFetch(`${FUNDRAISING_API_URL}/${endpoint}/${id}`, { method: 'DELETE' });
+      loadStats(); loadItems();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const openEdit = (item) => {
+    if (tab === 'pledges') {
+      setFormData({
+        donor_id: item.donor_id, total_pledge: (Number(item.total_pledge_cents) / 100).toFixed(2),
+        paid_to_date: (Number(item.paid_to_date_cents) / 100).toFixed(2),
+        installment_count: item.installment_count || '', installment_amount: item.installment_amount_cents ? (item.installment_amount_cents / 100).toFixed(2) : '',
+        frequency: item.frequency || '', designation: item.designation || 'unrestricted',
+        start_date: item.start_date || '', next_payment_date: item.next_payment_date || '', end_date: item.end_date || '',
+        status: item.status, notes: item.notes || '',
+      });
+    } else if (tab === 'in-kind') {
+      setFormData({
+        donor_id: item.donor_id, description: item.description, category: item.category,
+        estimated_value: (Number(item.estimated_value_cents) / 100).toFixed(2),
+        valuation_method: item.valuation_method || '', appraiser_name: item.appraiser_name || '',
+        donated_at: item.donated_at?.slice(0, 10) || '', tax_year: item.tax_year || '',
+        form_8283_signed: item.form_8283_signed || false, notes: item.notes || '',
+      });
+    } else if (tab === 'grants') {
+      setFormData({
+        funder_name: item.funder_name, funder_contact_email: item.funder_contact_email || '',
+        award_amount: (Number(item.award_amount_cents) / 100).toFixed(2),
+        spent_to_date: (Number(item.spent_to_date_cents) / 100).toFixed(2),
+        restriction_type: item.restriction_type, purpose: item.purpose || '', program: item.program || '',
+        grant_period_start: item.grant_period_start || '', grant_period_end: item.grant_period_end || '',
+        reporting_frequency: item.reporting_frequency || '', next_report_due: item.next_report_due || '',
+        deliverables: item.deliverables || '', status: item.status, notes: item.notes || '',
+      });
+    }
+    setShowModal(item);
+  };
+
+  const statusBadge = (s) => {
+    const cls = s === 'active' ? 'badge-green' : s === 'completed' ? 'badge-blue' : 'badge-red';
+    return <span className={`badge ${cls}`}>{s}</span>;
+  };
+
+  const tabStyle = (t) => ({
+    padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none',
+    background: tab === t ? 'var(--gold-dim)' : 'transparent', color: tab === t ? 'var(--gold-text)' : 'var(--text-muted)',
+  });
+
+  const donorName = (item) => item.donor ? `${item.donor.first_name} ${item.donor.last_name}` : '—';
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Fundraising</h2>
+        <p>Pledges, in-kind donations, grants, and UTM tracking</p>
+      </div>
+
+      {/* Stats */}
+      {stats && (
+        <div className="kpi-grid" style={{ marginBottom: 24 }}>
+          <div className="card">
+            <div className="card-title">Pledges</div>
+            <div className="card-value">{fmt(stats.pledges.total_pledged)}</div>
+            <div className="card-sub">{stats.pledges.active} active, {fmt(stats.pledges.total_paid)} paid</div>
+          </div>
+          <div className="card">
+            <div className="card-title">In-Kind</div>
+            <div className="card-value">{fmt(stats.in_kind.total_value)}</div>
+            <div className="card-sub">{stats.in_kind.count} items{stats.in_kind.pending_8283 > 0 ? `, ${stats.in_kind.pending_8283} pending 8283` : ''}</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Grants</div>
+            <div className="card-value">{fmt(stats.grants.total_awarded)}</div>
+            <div className="card-sub">{stats.grants.active} active, {fmt(stats.grants.total_spent)} spent</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Grant Reports Due</div>
+            <div className="card-value" style={{ color: stats.grants.reports_due_soon > 0 ? 'var(--red)' : 'var(--green)' }}>{stats.grants.reports_due_soon}</div>
+            <div className="card-sub">Overdue or due today</div>
+          </div>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+        <button style={tabStyle('pledges')} onClick={() => setTab('pledges')}>Pledges</button>
+        <button style={tabStyle('in-kind')} onClick={() => setTab('in-kind')}>In-Kind</button>
+        <button style={tabStyle('grants')} onClick={() => setTab('grants')}>Grants</button>
+        <button style={tabStyle('utm')} onClick={() => setTab('utm')}>UTM Tracking</button>
+      </div>
+
+      {/* PLEDGES TAB */}
+      {tab === 'pledges' && (
+        <>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+            <button className="btn btn-gold" onClick={() => { setShowModal({}); setFormData({ designation: 'unrestricted' }); }}>Add Pledge</button>
+            <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+              style={{ background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
+              <option value="">All</option><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div className="card">
+            <div className="table-wrap"><table><thead><tr><th>Donor</th><th>Total Pledge</th><th>Paid</th><th>Remaining</th><th>Frequency</th><th>Next Payment</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>}
+              {!loading && items.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No pledges found</td></tr>}
+              {!loading && items.map(p => (
+                <tr key={p.id}>
+                  <td className="td-primary">{donorName(p)}</td>
+                  <td className="td-mono">{fmt(Number(p.total_pledge_cents))}</td>
+                  <td className="td-mono">{fmt(Number(p.paid_to_date_cents))}</td>
+                  <td className="td-mono" style={{ color: 'var(--gold-text)' }}>{fmt(Number(p.total_pledge_cents) - Number(p.paid_to_date_cents))}</td>
+                  <td>{p.frequency || '—'}</td>
+                  <td>{p.next_payment_date || '—'}</td>
+                  <td>{statusBadge(p.status)}</td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openEdit(p)}>Edit</button>
+                    <button className="btn btn-danger btn-sm" onClick={() => handleDelete(p.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody></table></div>
+            {totalPages > 1 && <div className="pagination"><button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {page} of {totalPages}</span><button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button></div>}
+          </div>
+        </>
+      )}
+
+      {/* IN-KIND TAB */}
+      {tab === 'in-kind' && (
+        <>
+          <div style={{ marginBottom: 16 }}>
+            <button className="btn btn-gold" onClick={() => { setShowModal({}); setFormData({ category: 'other', tax_year: String(new Date().getFullYear()) }); }}>Add In-Kind Donation</button>
+          </div>
+          <div className="card">
+            <div className="table-wrap"><table><thead><tr><th>Donor</th><th>Description</th><th>Category</th><th>Est. Value</th><th>Date</th><th>Form 8283</th><th>Actions</th></tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>}
+              {!loading && items.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No in-kind donations</td></tr>}
+              {!loading && items.map(ik => (
+                <tr key={ik.id}>
+                  <td className="td-primary">{donorName(ik)}</td>
+                  <td>{ik.description}</td>
+                  <td>{ik.category}</td>
+                  <td className="td-mono">{fmt(Number(ik.estimated_value_cents))}</td>
+                  <td>{fmtDate(ik.donated_at)}</td>
+                  <td>{ik.form_8283_required ? (ik.form_8283_signed ? <span className="badge badge-green">Signed</span> : <span className="badge badge-red">Required</span>) : <span className="badge badge-blue">N/A</span>}</td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openEdit(ik)}>Edit</button>
+                    <button className="btn btn-danger btn-sm" onClick={() => handleDelete(ik.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody></table></div>
+            {totalPages > 1 && <div className="pagination"><button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {page} of {totalPages}</span><button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button></div>}
+          </div>
+        </>
+      )}
+
+      {/* GRANTS TAB */}
+      {tab === 'grants' && (
+        <>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+            <button className="btn btn-gold" onClick={() => { setShowModal({}); setFormData({ restriction_type: 'unrestricted' }); }}>Add Grant</button>
+            <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+              style={{ background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
+              <option value="">All</option><option value="active">Active</option><option value="completed">Completed</option>
+            </select>
+          </div>
+          <div className="card">
+            <div className="table-wrap"><table><thead><tr><th>Funder</th><th>Award</th><th>Spent</th><th>Remaining</th><th>Restriction</th><th>Period</th><th>Next Report</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>}
+              {!loading && items.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No grants found</td></tr>}
+              {!loading && items.map(g => (
+                <tr key={g.id}>
+                  <td className="td-primary">{g.funder_name}</td>
+                  <td className="td-mono">{fmt(Number(g.award_amount_cents))}</td>
+                  <td className="td-mono">{fmt(Number(g.spent_to_date_cents))}</td>
+                  <td className="td-mono" style={{ color: 'var(--gold-text)' }}>{fmt(Number(g.award_amount_cents) - Number(g.spent_to_date_cents))}</td>
+                  <td>{g.restriction_type}</td>
+                  <td style={{ fontSize: 12 }}>{g.grant_period_start && g.grant_period_end ? `${g.grant_period_start} to ${g.grant_period_end}` : '—'}</td>
+                  <td style={{ color: g.next_report_due && g.next_report_due <= new Date().toISOString().split('T')[0] ? 'var(--red)' : undefined }}>{g.next_report_due || '—'}</td>
+                  <td>{statusBadge(g.status)}</td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openEdit(g)}>Edit</button>
+                    <button className="btn btn-danger btn-sm" onClick={() => handleDelete(g.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody></table></div>
+            {totalPages > 1 && <div className="pagination"><button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {page} of {totalPages}</span><button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button></div>}
+          </div>
+        </>
+      )}
+
+      {/* UTM TAB */}
+      {tab === 'utm' && (
+        <div className="card">
+          {loading && <div style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></div>}
+          {!loading && utmData && (
+            <div style={{ padding: 20 }}>
+              <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>{utmData.total_tracked} donations with UTM tracking data</p>
+              {utmData.total_tracked === 0 && <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No UTM-tagged donations yet. Pass utm_source, utm_medium, utm_campaign parameters when creating checkout sessions.</p>}
+
+              {utmData.by_source.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <h4 style={{ marginBottom: 10 }}>By Source</h4>
+                  <table><thead><tr><th>Source</th><th>Donations</th><th>Total</th></tr></thead>
+                  <tbody>{utmData.by_source.map(s => <tr key={s.name}><td className="td-primary">{s.name}</td><td className="td-mono">{s.count}</td><td className="td-mono">{fmt(s.total)}</td></tr>)}</tbody></table>
+                </div>
+              )}
+              {utmData.by_medium.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <h4 style={{ marginBottom: 10 }}>By Medium</h4>
+                  <table><thead><tr><th>Medium</th><th>Donations</th><th>Total</th></tr></thead>
+                  <tbody>{utmData.by_medium.map(s => <tr key={s.name}><td className="td-primary">{s.name}</td><td className="td-mono">{s.count}</td><td className="td-mono">{fmt(s.total)}</td></tr>)}</tbody></table>
+                </div>
+              )}
+              {utmData.by_campaign.length > 0 && (
+                <div>
+                  <h4 style={{ marginBottom: 10 }}>By Campaign</h4>
+                  <table><thead><tr><th>Campaign</th><th>Donations</th><th>Total</th></tr></thead>
+                  <tbody>{utmData.by_campaign.map(s => <tr key={s.name}><td className="td-primary">{s.name}</td><td className="td-mono">{s.count}</td><td className="td-mono">{fmt(s.total)}</td></tr>)}</tbody></table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* PLEDGE MODAL */}
+      {showModal && tab === 'pledges' && (
+        <div className="modal-overlay" onClick={() => setShowModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{showModal.id ? 'Edit Pledge' : 'Add Pledge'}</h3>
+            <div className="form-group"><label>Donor</label>
+              <select value={formData.donor_id || ''} onChange={e => setFormData({ ...formData, donor_id: e.target.value })}>
+                <option value="">Select donor...</option>
+                {donors.map(d => <option key={d.id} value={d.id}>{d.first_name} {d.last_name} ({d.email})</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label>Total Pledge Amount</label><DollarInput value={formData.total_pledge} onChange={v => setFormData({ ...formData, total_pledge: v })} /></div>
+            {showModal.id && <div className="form-group"><label>Paid to Date</label><DollarInput value={formData.paid_to_date} onChange={v => setFormData({ ...formData, paid_to_date: v })} /></div>}
+            <div className="form-group"><label>Installment Amount</label><DollarInput value={formData.installment_amount} onChange={v => setFormData({ ...formData, installment_amount: v })} /></div>
+            <div className="form-group"><label># of Installments</label><input type="number" min="1" value={formData.installment_count || ''} onChange={e => setFormData({ ...formData, installment_count: e.target.value })} /></div>
+            <div className="form-group"><label>Frequency</label>
+              <select value={formData.frequency || ''} onChange={e => setFormData({ ...formData, frequency: e.target.value })}>
+                <option value="">One-time</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annual">Annual</option>
+              </select>
+            </div>
+            <div className="form-group"><label>Designation</label><input value={formData.designation || ''} onChange={e => setFormData({ ...formData, designation: e.target.value })} /></div>
+            <div className="form-group"><label>Start Date</label><input type="date" value={formData.start_date || ''} onChange={e => setFormData({ ...formData, start_date: e.target.value })} /></div>
+            <div className="form-group"><label>Next Payment Date</label><input type="date" value={formData.next_payment_date || ''} onChange={e => setFormData({ ...formData, next_payment_date: e.target.value })} /></div>
+            <div className="form-group"><label>End Date</label><input type="date" value={formData.end_date || ''} onChange={e => setFormData({ ...formData, end_date: e.target.value })} /></div>
+            {showModal.id && <div className="form-group"><label>Status</label>
+              <select value={formData.status || 'active'} onChange={e => setFormData({ ...formData, status: e.target.value })}>
+                <option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
+              </select>
+            </div>}
+            <div className="form-group"><label>Notes</label><textarea value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} /></div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSave} disabled={saving || !formData.donor_id || !formData.total_pledge}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* IN-KIND MODAL */}
+      {showModal && tab === 'in-kind' && (
+        <div className="modal-overlay" onClick={() => setShowModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{showModal.id ? 'Edit In-Kind Donation' : 'Add In-Kind Donation'}</h3>
+            <div className="form-group"><label>Donor</label>
+              <select value={formData.donor_id || ''} onChange={e => setFormData({ ...formData, donor_id: e.target.value })}>
+                <option value="">Select donor...</option>
+                {donors.map(d => <option key={d.id} value={d.id}>{d.first_name} {d.last_name} ({d.email})</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label>Description</label><input value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} /></div>
+            <div className="form-group"><label>Category</label>
+              <select value={formData.category || 'other'} onChange={e => setFormData({ ...formData, category: e.target.value })}>
+                <option value="supplies">Supplies</option><option value="equipment">Equipment</option><option value="vehicle">Vehicle</option>
+                <option value="real_estate">Real Estate</option><option value="securities">Securities</option><option value="services">Services</option>
+                <option value="food">Food</option><option value="clothing">Clothing</option><option value="other">Other</option>
+              </select>
+            </div>
+            <div className="form-group"><label>Estimated Value</label><DollarInput value={formData.estimated_value} onChange={v => setFormData({ ...formData, estimated_value: v })} /></div>
+            {parseCents(formData.estimated_value) >= 50000 && <div className="alert-banner alert-warning" style={{ marginBottom: 14 }}>IRS Form 8283 required for non-cash donations over $500.</div>}
+            <div className="form-group"><label>Valuation Method</label>
+              <select value={formData.valuation_method || ''} onChange={e => setFormData({ ...formData, valuation_method: e.target.value })}>
+                <option value="">Select...</option><option value="donor_estimate">Donor Estimate</option><option value="fair_market_value">Fair Market Value</option>
+                <option value="independent_appraisal">Independent Appraisal</option><option value="thrift_shop_value">Thrift Shop Value</option>
+              </select>
+            </div>
+            <div className="form-group"><label>Appraiser Name (if applicable)</label><input value={formData.appraiser_name || ''} onChange={e => setFormData({ ...formData, appraiser_name: e.target.value })} /></div>
+            <div className="form-group"><label>Date Donated</label><input type="date" value={formData.donated_at || ''} onChange={e => setFormData({ ...formData, donated_at: e.target.value })} /></div>
+            <div className="form-group"><label>Tax Year</label><input type="number" value={formData.tax_year || ''} onChange={e => setFormData({ ...formData, tax_year: e.target.value })} /></div>
+            {showModal.id && showModal.form_8283_required && (
+              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={formData.form_8283_signed || false} onChange={e => setFormData({ ...formData, form_8283_signed: e.target.checked })} style={{ width: 'auto' }} />
+                <label style={{ margin: 0 }}>Form 8283 signed</label>
+              </div>
+            )}
+            <div className="form-group"><label>Notes</label><textarea value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} /></div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSave} disabled={saving || !formData.donor_id || !formData.description}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GRANT MODAL */}
+      {showModal && tab === 'grants' && (
+        <div className="modal-overlay" onClick={() => setShowModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{showModal.id ? 'Edit Grant' : 'Add Grant'}</h3>
+            <div className="form-group"><label>Funder Name</label><input value={formData.funder_name || ''} onChange={e => setFormData({ ...formData, funder_name: e.target.value })} /></div>
+            <div className="form-group"><label>Funder Contact Email</label><input type="email" value={formData.funder_contact_email || ''} onChange={e => setFormData({ ...formData, funder_contact_email: e.target.value })} /></div>
+            <div className="form-group"><label>Award Amount</label><DollarInput value={formData.award_amount} onChange={v => setFormData({ ...formData, award_amount: v })} /></div>
+            {showModal.id && <div className="form-group"><label>Spent to Date</label><DollarInput value={formData.spent_to_date} onChange={v => setFormData({ ...formData, spent_to_date: v })} /></div>}
+            <div className="form-group"><label>Restriction Type</label>
+              <select value={formData.restriction_type || 'unrestricted'} onChange={e => setFormData({ ...formData, restriction_type: e.target.value })}>
+                <option value="unrestricted">Unrestricted</option><option value="temporarily_restricted">Temporarily Restricted</option><option value="permanently_restricted">Permanently Restricted</option>
+              </select>
+            </div>
+            <div className="form-group"><label>Purpose</label><input value={formData.purpose || ''} onChange={e => setFormData({ ...formData, purpose: e.target.value })} /></div>
+            <div className="form-group"><label>Program</label><input value={formData.program || ''} onChange={e => setFormData({ ...formData, program: e.target.value })} /></div>
+            <div className="form-group"><label>Grant Period Start</label><input type="date" value={formData.grant_period_start || ''} onChange={e => setFormData({ ...formData, grant_period_start: e.target.value })} /></div>
+            <div className="form-group"><label>Grant Period End</label><input type="date" value={formData.grant_period_end || ''} onChange={e => setFormData({ ...formData, grant_period_end: e.target.value })} /></div>
+            <div className="form-group"><label>Reporting Frequency</label>
+              <select value={formData.reporting_frequency || ''} onChange={e => setFormData({ ...formData, reporting_frequency: e.target.value })}>
+                <option value="">None</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="semi-annual">Semi-Annual</option><option value="annual">Annual</option><option value="final">Final Only</option>
+              </select>
+            </div>
+            <div className="form-group"><label>Next Report Due</label><input type="date" value={formData.next_report_due || ''} onChange={e => setFormData({ ...formData, next_report_due: e.target.value })} /></div>
+            <div className="form-group"><label>Deliverables</label><textarea value={formData.deliverables || ''} onChange={e => setFormData({ ...formData, deliverables: e.target.value })} /></div>
+            {showModal.id && <div className="form-group"><label>Status</label>
+              <select value={formData.status || 'active'} onChange={e => setFormData({ ...formData, status: e.target.value })}>
+                <option value="active">Active</option><option value="completed">Completed</option><option value="closed">Closed</option>
+              </select>
+            </div>}
+            <div className="form-group"><label>Notes</label><textarea value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} /></div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSave} disabled={saving || !formData.funder_name || !formData.award_amount}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════ */
 export default function App() {
@@ -2955,6 +3434,7 @@ export default function App() {
             <NavLink to="/compliance"><span className="nav-icon">◇</span> Compliance</NavLink>
             <NavLink to="/matching"><span className="nav-icon">⬡</span> Matching</NavLink>
             <NavLink to="/events"><span className="nav-icon">◆</span> Events</NavLink>
+            <NavLink to="/fundraising"><span className="nav-icon">▣</span> Fundraising</NavLink>
           </nav>
 
           <div className="sidebar-footer">
@@ -2972,6 +3452,7 @@ export default function App() {
             <Route path="/compliance" element={<ComplianceView />} />
             <Route path="/matching" element={<MatchingView />} />
             <Route path="/events" element={<EventsView />} />
+            <Route path="/fundraising" element={<FundraisingView />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>
