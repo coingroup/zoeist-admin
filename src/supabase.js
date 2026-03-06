@@ -11,6 +11,7 @@ export const RECURRING_API_URL = `${supabaseUrl}/functions/v1/recurring-api`;
 export const COMPLIANCE_REPORTS_URL = `${supabaseUrl}/functions/v1/compliance-reports`;
 export const COMPLIANCE_ALERTS_URL = `${supabaseUrl}/functions/v1/compliance-alerts`;
 export const COMPLIANCE_FIN_STMT_URL = `${supabaseUrl}/functions/v1/compliance-financial-statement`;
+export const MATCHING_GIFTS_API_URL = `${supabaseUrl}/functions/v1/matching-gifts-api`;
 
 export async function adminFetch(path, options = {}) {
   const { data: { session } } = await supabase.auth.getSession();
