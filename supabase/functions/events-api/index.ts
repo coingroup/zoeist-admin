@@ -94,18 +94,13 @@ Deno.serve(async (req: Request) => {
       if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
       const body = await req.json();
 
-      const ticketPrice = body.ticket_price_cents || 0;
-      const fmv = body.fair_market_value_cents || 0;
-      const taxDeductible = Math.max(0, ticketPrice - fmv);
-
       const insert = {
         name: body.name,
         description: body.description || null,
         event_date: body.event_date,
         venue: body.venue || null,
-        ticket_price_cents: ticketPrice,
-        fair_market_value_cents: fmv,
-        tax_deductible_cents: taxDeductible,
+        ticket_price_cents: body.ticket_price_cents || 0,
+        fair_market_value_cents: body.fair_market_value_cents || 0,
         capacity: body.capacity || null,
         campaign_id: body.campaign_id || null,
         is_active: body.is_active !== false,
@@ -133,13 +128,6 @@ Deno.serve(async (req: Request) => {
       const updates: Record<string, unknown> = {};
       for (const key of allowed) {
         if (key in body) updates[key] = body[key];
-      }
-
-      if ('ticket_price_cents' in updates || 'fair_market_value_cents' in updates) {
-        const { data: current } = await supabase.from('events').select('ticket_price_cents, fair_market_value_cents').eq('id', id).single();
-        const tp = (updates.ticket_price_cents as number) ?? current?.ticket_price_cents ?? 0;
-        const fmv = (updates.fair_market_value_cents as number) ?? current?.fair_market_value_cents ?? 0;
-        updates.tax_deductible_cents = Math.max(0, tp - fmv);
       }
 
       updates.updated_at = new Date().toISOString();
