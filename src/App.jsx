@@ -207,6 +207,31 @@ const fmtK = (cents) => {
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 const fmtMonth = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
 
+// Parse user-entered dollar strings like "1,250.00" or "1250" to cents
+const parseCents = (v) => {
+  if (!v && v !== 0) return 0;
+  const cleaned = String(v).replace(/[^0-9.]/g, '');
+  return Math.round(parseFloat(cleaned || '0') * 100);
+};
+
+// Dollar input: shows $ prefix, accepts commas/decimals, stores raw string
+function DollarInput({ value, onChange, placeholder, ...props }) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)', fontSize: 13, pointerEvents: 'none' }}>$</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder || '0.00'}
+        style={{ paddingLeft: 24, width: '100%' }}
+        {...props}
+      />
+    </div>
+  );
+}
+
 const CHART_GOLD = '#c8a855';
 const CHART_COLORS = ['#c8a855', '#60a5fa', '#4ade80', '#f87171', '#a78bfa', '#fb923c'];
 const PIE_COLORS = ['#c8a855', '#60a5fa', '#4ade80', '#f87171', '#a78bfa'];
@@ -1998,7 +2023,7 @@ function MatchingView() {
           donation_id: showCreateModal.id,
           company_name: formData.company_name || showCreateModal.donor?.employer || '',
           match_ratio: formData.match_ratio ? parseFloat(formData.match_ratio) : 1.0,
-          match_amount_cents: formData.match_amount ? Math.round(parseFloat(formData.match_amount) * 100) : undefined,
+          match_amount_cents: formData.match_amount ? parseCents(formData.match_amount) : undefined,
           notes: formData.notes,
         }),
       });
@@ -2016,7 +2041,7 @@ function MatchingView() {
     try {
       const updates = {};
       if (formData.status) updates.status = formData.status;
-      if (formData.match_amount) updates.match_amount_cents = Math.round(parseFloat(formData.match_amount) * 100);
+      if (formData.match_amount) updates.match_amount_cents = parseCents(formData.match_amount);
       if (formData.notes !== undefined) updates.notes = formData.notes;
       if (formData.denial_reason) updates.denial_reason = formData.denial_reason;
       if (formData.match_receipt_number) updates.match_receipt_number = formData.match_receipt_number;
@@ -2047,9 +2072,9 @@ function MatchingView() {
       const body = {
         company_name: formData.company_name,
         match_ratio: formData.match_ratio ? parseFloat(formData.match_ratio) : 1.0,
-        max_match_cents: formData.max_match ? Math.round(parseFloat(formData.max_match) * 100) : null,
-        min_donation_cents: formData.min_donation ? Math.round(parseFloat(formData.min_donation) * 100) : 2500,
-        annual_max_cents: formData.annual_max ? Math.round(parseFloat(formData.annual_max) * 100) : null,
+        max_match_cents: formData.max_match ? parseCents(formData.max_match) : null,
+        min_donation_cents: formData.min_donation ? parseCents(formData.min_donation) : 2500,
+        annual_max_cents: formData.annual_max ? parseCents(formData.annual_max) : null,
         submission_deadline_months: formData.deadline_months ? parseInt(formData.deadline_months) : 12,
         program_url: formData.program_url || null,
         notes: formData.notes || null,
@@ -2291,7 +2316,7 @@ function MatchingView() {
             </div>
             <div className="form-group">
               <label>Match Amount ($ override, leave blank to auto-calculate)</label>
-              <input type="number" step="0.01" min="0" value={formData.match_amount || ''} onChange={e => setFormData({ ...formData, match_amount: e.target.value })} placeholder="Auto-calculated from ratio" />
+              <DollarInput value={formData.match_amount} onChange={v => setFormData({ ...formData, match_amount: v })} placeholder="Auto-calculated from ratio" />
             </div>
             <div className="form-group">
               <label>Notes</label>
@@ -2338,7 +2363,7 @@ function MatchingView() {
             )}
             <div className="form-group">
               <label>Match Amount ($)</label>
-              <input type="number" step="0.01" min="0" value={formData.match_amount || (showUpdateModal.match_amount_cents / 100).toFixed(2)} onChange={e => setFormData({ ...formData, match_amount: e.target.value })} />
+              <DollarInput value={formData.match_amount || (showUpdateModal.match_amount_cents / 100).toFixed(2)} onChange={v => setFormData({ ...formData, match_amount: v })} />
             </div>
             <div className="form-group">
               <label>Notes</label>
@@ -2367,15 +2392,15 @@ function MatchingView() {
             </div>
             <div className="form-group">
               <label>Max Match per Donation ($, leave blank for no limit)</label>
-              <input type="number" step="0.01" min="0" value={formData.max_match || ''} onChange={e => setFormData({ ...formData, max_match: e.target.value })} />
+              <DollarInput value={formData.max_match} onChange={v => setFormData({ ...formData, max_match: v })} />
             </div>
             <div className="form-group">
               <label>Min Donation ($)</label>
-              <input type="number" step="0.01" min="0" value={formData.min_donation || ''} onChange={e => setFormData({ ...formData, min_donation: e.target.value })} placeholder="25.00" />
+              <DollarInput value={formData.min_donation} onChange={v => setFormData({ ...formData, min_donation: v })} placeholder="25.00" />
             </div>
             <div className="form-group">
               <label>Annual Max ($, leave blank for no limit)</label>
-              <input type="number" step="0.01" min="0" value={formData.annual_max || ''} onChange={e => setFormData({ ...formData, annual_max: e.target.value })} />
+              <DollarInput value={formData.annual_max} onChange={v => setFormData({ ...formData, annual_max: v })} />
             </div>
             <div className="form-group">
               <label>Submission Deadline (months after donation)</label>
@@ -2461,8 +2486,8 @@ function EventsView() {
         description: formData.description || null,
         event_date: formData.event_date,
         venue: formData.venue || null,
-        ticket_price_cents: formData.ticket_price ? Math.round(parseFloat(formData.ticket_price) * 100) : 0,
-        fair_market_value_cents: formData.fmv ? Math.round(parseFloat(formData.fmv) * 100) : 0,
+        ticket_price_cents: parseCents(formData.ticket_price),
+        fair_market_value_cents: parseCents(formData.fmv),
         capacity: formData.capacity ? parseInt(formData.capacity) : null,
         is_active: formData.is_active !== false,
       };
@@ -2499,7 +2524,7 @@ function EventsView() {
           name: formData.att_name,
           email: formData.att_email || null,
           ticket_type: formData.att_type || 'general',
-          ticket_price_cents: formData.att_price ? Math.round(parseFloat(formData.att_price) * 100) : detail.event.ticket_price_cents || 0,
+          ticket_price_cents: formData.att_price ? parseCents(formData.att_price) : detail.event.ticket_price_cents || 0,
         }),
       });
       setShowAttendeeModal(false);
@@ -2775,15 +2800,15 @@ function EventsView() {
             </div>
             <div className="form-group">
               <label>Ticket Price ($)</label>
-              <input type="number" step="0.01" min="0" value={formData.ticket_price || ''} onChange={e => setFormData({ ...formData, ticket_price: e.target.value })} />
+              <DollarInput value={formData.ticket_price} onChange={v => setFormData({ ...formData, ticket_price: v })} />
             </div>
             <div className="form-group">
               <label>Fair Market Value of Goods/Services ($) — triggers quid pro quo disclosure</label>
-              <input type="number" step="0.01" min="0" value={formData.fmv || ''} onChange={e => setFormData({ ...formData, fmv: e.target.value })} />
+              <DollarInput value={formData.fmv} onChange={v => setFormData({ ...formData, fmv: v })} />
             </div>
-            {formData.ticket_price && formData.fmv && parseFloat(formData.fmv) > 0 && (
+            {formData.ticket_price && formData.fmv && parseCents(formData.fmv) > 0 && (
               <div className="alert-banner alert-warning" style={{ marginBottom: 14 }}>
-                Tax-deductible per ticket: ${(Math.max(0, parseFloat(formData.ticket_price || 0) - parseFloat(formData.fmv || 0))).toFixed(2)}. IRS QPQ disclosure required for payments over $75.
+                Tax-deductible per ticket: {fmt(Math.max(0, parseCents(formData.ticket_price) - parseCents(formData.fmv)))}. IRS QPQ disclosure required for payments over $75.
               </div>
             )}
             <div className="form-group">
@@ -2826,7 +2851,7 @@ function EventsView() {
             </div>
             <div className="form-group">
               <label>Ticket Price ($)</label>
-              <input type="number" step="0.01" min="0" value={formData.att_price || ''} onChange={e => setFormData({ ...formData, att_price: e.target.value })} />
+              <DollarInput value={formData.att_price} onChange={v => setFormData({ ...formData, att_price: v })} />
             </div>
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setShowAttendeeModal(false)}>Cancel</button>
