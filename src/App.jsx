@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -2405,6 +2405,475 @@ function MatchingView() {
 }
 
 /* ═══════════════════════════════════════════
+   EVENTS & QUID PRO QUO
+   ═══════════════════════════════════════════ */
+function EventsView() {
+  const [stats, setStats] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [showEventModal, setShowEventModal] = useState(null); // null=closed, {}=new, {id:..}=edit
+  const [detail, setDetail] = useState(null); // { event, attendees, donations }
+  const [showAttendeeModal, setShowAttendeeModal] = useState(false);
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [linkDonations, setLinkDonations] = useState([]);
+  const [formData, setFormData] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const loadStats = async () => {
+    try {
+      const data = await adminFetch(`${EVENTS_API_URL}/stats`);
+      setStats(data);
+    } catch (err) { console.error('Stats error:', err); }
+  };
+
+  const loadList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: '25' });
+      if (statusFilter) params.set('status', statusFilter);
+      const data = await adminFetch(`${EVENTS_API_URL}/list?${params}`);
+      setEvents(data.events || []);
+      setTotalPages(data.totalPages || 1);
+      setTotal(data.total || 0);
+    } catch (err) { console.error('List error:', err); }
+    setLoading(false);
+  }, [page, statusFilter]);
+
+  useEffect(() => { loadStats(); }, []);
+  useEffect(() => { loadList(); }, [loadList]);
+
+  const loadDetail = async (id) => {
+    try {
+      const data = await adminFetch(`${EVENTS_API_URL}/event/${id}`);
+      setDetail(data);
+    } catch (err) { alert('Failed to load details: ' + err.message); }
+  };
+
+  const handleSaveEvent = async () => {
+    setSaving(true);
+    try {
+      const body = {
+        name: formData.name,
+        description: formData.description || null,
+        event_date: formData.event_date,
+        venue: formData.venue || null,
+        ticket_price_cents: formData.ticket_price ? Math.round(parseFloat(formData.ticket_price) * 100) : 0,
+        fair_market_value_cents: formData.fmv ? Math.round(parseFloat(formData.fmv) * 100) : 0,
+        capacity: formData.capacity ? parseInt(formData.capacity) : null,
+        is_active: formData.is_active !== false,
+      };
+      if (showEventModal.id) {
+        await adminFetch(`${EVENTS_API_URL}/event/${showEventModal.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      } else {
+        await adminFetch(`${EVENTS_API_URL}/event`, { method: 'POST', body: JSON.stringify(body) });
+      }
+      setShowEventModal(null);
+      setFormData({});
+      loadStats();
+      loadList();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleDeleteEvent = async (id) => {
+    if (!confirm('Delete this event? Linked donations will be unlinked.')) return;
+    try {
+      await adminFetch(`${EVENTS_API_URL}/event/${id}`, { method: 'DELETE' });
+      setDetail(null);
+      loadStats();
+      loadList();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const handleAddAttendee = async () => {
+    setSaving(true);
+    try {
+      await adminFetch(`${EVENTS_API_URL}/attendee`, {
+        method: 'POST',
+        body: JSON.stringify({
+          event_id: detail.event.id,
+          name: formData.att_name,
+          email: formData.att_email || null,
+          ticket_type: formData.att_type || 'general',
+          ticket_price_cents: formData.att_price ? Math.round(parseFloat(formData.att_price) * 100) : detail.event.ticket_price_cents || 0,
+        }),
+      });
+      setShowAttendeeModal(false);
+      setFormData({});
+      loadDetail(detail.event.id);
+      loadStats();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleCheckin = async (attId) => {
+    try {
+      await adminFetch(`${EVENTS_API_URL}/attendee/${attId}/checkin`, { method: 'PUT' });
+      loadDetail(detail.event.id);
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const handleDeleteAttendee = async (attId) => {
+    if (!confirm('Remove this attendee?')) return;
+    try {
+      await adminFetch(`${EVENTS_API_URL}/attendee/${attId}`, { method: 'DELETE' });
+      loadDetail(detail.event.id);
+      loadStats();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const handleOpenLinkModal = async () => {
+    try {
+      const data = await adminFetch('donations?limit=100');
+      setLinkDonations((data.donations || []).filter(d => !d.event_id && d.status === 'succeeded'));
+      setShowLinkModal(true);
+    } catch (err) { alert('Failed to load donations: ' + err.message); }
+  };
+
+  const handleLinkDonation = async (donationId) => {
+    try {
+      const result = await adminFetch(`${EVENTS_API_URL}/link-donation`, {
+        method: 'POST',
+        body: JSON.stringify({ event_id: detail.event.id, donation_id: donationId }),
+      });
+      setShowLinkModal(false);
+      loadDetail(detail.event.id);
+      loadStats();
+      if (result.qpq_applied) {
+        alert(`Quid pro quo applied: FMV of $${(detail.event.fair_market_value_cents / 100).toFixed(2)} deducted. Tax-deductible: $${(result.tax_deductible_cents / 100).toFixed(2)}`);
+      }
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const handleUnlinkDonation = async (donationId) => {
+    if (!confirm('Unlink this donation from the event? Quid pro quo data will be cleared.')) return;
+    try {
+      await adminFetch(`${EVENTS_API_URL}/unlink-donation`, {
+        method: 'POST',
+        body: JSON.stringify({ donation_id: donationId }),
+      });
+      loadDetail(detail.event.id);
+      loadStats();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const qpqBadge = (e) => {
+    if (!e.fair_market_value_cents || e.fair_market_value_cents === 0) return <span className="badge badge-green">No QPQ</span>;
+    return <span className="badge badge-gold">QPQ: {fmt(e.fair_market_value_cents)} FMV</span>;
+  };
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Events</h2>
+        <p>Fundraising events with quid pro quo receipting</p>
+      </div>
+
+      {/* Stats */}
+      {stats && (
+        <div className="kpi-grid" style={{ marginBottom: 24 }}>
+          <div className="card">
+            <div className="card-title">Upcoming</div>
+            <div className="card-value" style={{ color: 'var(--green)' }}>{stats.active}</div>
+            <div className="card-sub">{stats.past} past events</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Total Revenue</div>
+            <div className="card-value">{fmt(stats.total_revenue_cents || 0)}</div>
+            <div className="card-sub">From event donations</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Total Attendees</div>
+            <div className="card-value">{stats.total_attendees}</div>
+            <div className="card-sub">Across all events</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Total Events</div>
+            <div className="card-value">{stats.total_events}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Controls */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center' }}>
+        <button className="btn btn-gold" onClick={() => { setShowEventModal({}); setFormData({ is_active: true }); }}>Create Event</button>
+        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+          style={{ background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
+          <option value="">All Events</option>
+          <option value="active">Active</option>
+          <option value="past">Past</option>
+        </select>
+      </div>
+
+      {/* Events Table */}
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>Date</th>
+                <th>Venue</th>
+                <th>Ticket Price</th>
+                <th>FMV</th>
+                <th>Tax Deductible</th>
+                <th>Tickets Sold</th>
+                <th>Revenue</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>}
+              {!loading && events.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>No events found</td></tr>}
+              {!loading && events.map(e => (
+                <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => loadDetail(e.id)}>
+                  <td className="td-primary">{e.name}</td>
+                  <td>{fmtDate(e.event_date)}</td>
+                  <td>{e.venue || '—'}</td>
+                  <td className="td-mono">{fmt(e.ticket_price_cents || 0)}</td>
+                  <td className="td-mono">{fmt(e.fair_market_value_cents || 0)}</td>
+                  <td className="td-mono" style={{ color: 'var(--green)' }}>{fmt(e.tax_deductible_cents || 0)}</td>
+                  <td className="td-mono">{e.tickets_sold || 0}{e.capacity ? ` / ${e.capacity}` : ''}</td>
+                  <td className="td-mono">{fmt(e.total_revenue_cents || 0)}</td>
+                  <td>{e.is_active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Closed</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {totalPages > 1 && (
+          <div className="pagination">
+            <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button>
+            <span>Page {page} of {totalPages} ({total} total)</span>
+            <button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
+          </div>
+        )}
+      </div>
+
+      {/* EVENT DETAIL MODAL */}
+      {detail && (
+        <div className="modal-overlay" onClick={() => setDetail(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 800 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+              <h3 style={{ margin: 0 }}>{detail.event.name}</h3>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => {
+                  setShowEventModal(detail.event);
+                  setFormData({
+                    name: detail.event.name, description: detail.event.description || '',
+                    event_date: detail.event.event_date?.slice(0, 16) || '', venue: detail.event.venue || '',
+                    ticket_price: detail.event.ticket_price_cents ? (detail.event.ticket_price_cents / 100).toFixed(2) : '',
+                    fmv: detail.event.fair_market_value_cents ? (detail.event.fair_market_value_cents / 100).toFixed(2) : '',
+                    capacity: detail.event.capacity || '', is_active: detail.event.is_active,
+                  });
+                  setDetail(null);
+                }}>Edit</button>
+                <button className="btn btn-danger btn-sm" onClick={() => handleDeleteEvent(detail.event.id)}>Delete</button>
+              </div>
+            </div>
+
+            {/* Event summary badges */}
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+              <div className="donor-badge"><span className="donor-badge-label">Date</span><span className="donor-badge-value">{fmtDate(detail.event.event_date)}</span></div>
+              <div className="donor-badge"><span className="donor-badge-label">Venue</span><span className="donor-badge-value">{detail.event.venue || '—'}</span></div>
+              <div className="donor-badge"><span className="donor-badge-label">Ticket</span><span className="donor-badge-value">{fmt(detail.event.ticket_price_cents || 0)}</span></div>
+              <div className="donor-badge"><span className="donor-badge-label">FMV</span><span className="donor-badge-value">{fmt(detail.event.fair_market_value_cents || 0)}</span></div>
+              <div className="donor-badge"><span className="donor-badge-label">Tax Deductible</span><span className="donor-badge-value" style={{ color: 'var(--green)' }}>{fmt(detail.event.tax_deductible_cents || 0)}</span></div>
+            </div>
+
+            {detail.event.fair_market_value_cents > 0 && (
+              <div className="alert-banner alert-warning" style={{ marginBottom: 16 }}>
+                Quid pro quo: Donors receive goods/services valued at {fmt(detail.event.fair_market_value_cents)}. Donations over $75 require QPQ disclosure on receipts.
+              </div>
+            )}
+
+            {detail.event.description && <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>{detail.event.description}</p>}
+
+            {/* Attendees */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h4 style={{ color: 'var(--text)' }}>Attendees ({detail.attendees.length}{detail.event.capacity ? ` / ${detail.event.capacity}` : ''})</h4>
+              <button className="btn btn-gold btn-sm" onClick={() => { setShowAttendeeModal(true); setFormData({ att_price: detail.event.ticket_price_cents ? (detail.event.ticket_price_cents / 100).toFixed(2) : '0' }); }}>Add Attendee</button>
+            </div>
+            <div className="table-wrap" style={{ marginBottom: 20 }}>
+              <table>
+                <thead><tr><th>Name</th><th>Email</th><th>Type</th><th>Ticket</th><th>Checked In</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {detail.attendees.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', padding: 16, color: 'var(--text-dim)' }}>No attendees yet</td></tr>}
+                  {detail.attendees.map(a => (
+                    <tr key={a.id}>
+                      <td className="td-primary">{a.name}</td>
+                      <td>{a.email || '—'}</td>
+                      <td>{a.ticket_type}</td>
+                      <td className="td-mono">{fmt(a.ticket_price_cents || 0)}</td>
+                      <td>{a.checked_in ? <span className="badge badge-green">Yes</span> : <span className="badge badge-blue">No</span>}</td>
+                      <td style={{ display: 'flex', gap: 4 }}>
+                        {!a.checked_in && <button className="btn btn-gold btn-sm" onClick={() => handleCheckin(a.id)}>Check In</button>}
+                        <button className="btn btn-danger btn-sm" onClick={() => handleDeleteAttendee(a.id)}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Linked Donations */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h4 style={{ color: 'var(--text)' }}>Linked Donations ({detail.donations.length})</h4>
+              <button className="btn btn-ghost btn-sm" onClick={handleOpenLinkModal}>Link Donation</button>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Receipt #</th><th>Donor</th><th>Amount</th><th>QPQ FMV</th><th>Tax Deductible</th><th>Date</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {detail.donations.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', padding: 16, color: 'var(--text-dim)' }}>No linked donations</td></tr>}
+                  {detail.donations.map(d => (
+                    <tr key={d.id}>
+                      <td className="td-mono">{d.receipt_number || '—'}</td>
+                      <td className="td-primary">{d.donor ? `${d.donor.first_name} ${d.donor.last_name}` : '—'}</td>
+                      <td className="td-mono">{fmt(d.amount_cents)}</td>
+                      <td className="td-mono">{d.goods_services_value_cents ? fmt(d.goods_services_value_cents) : '—'}</td>
+                      <td className="td-mono" style={{ color: 'var(--green)' }}>{d.tax_deductible_amount_cents != null ? fmt(d.tax_deductible_amount_cents) : fmt(d.amount_cents)}</td>
+                      <td>{fmtDate(d.donated_at)}</td>
+                      <td><button className="btn btn-danger btn-sm" onClick={() => handleUnlinkDonation(d.id)}>Unlink</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: 16 }}>
+              <button className="btn btn-ghost" onClick={() => setDetail(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE/EDIT EVENT MODAL */}
+      {showEventModal && (
+        <div className="modal-overlay" onClick={() => setShowEventModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{showEventModal.id ? 'Edit Event' : 'Create Event'}</h3>
+            <div className="form-group">
+              <label>Event Name</label>
+              <input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Date & Time</label>
+              <input type="datetime-local" value={formData.event_date || ''} onChange={e => setFormData({ ...formData, event_date: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Venue</label>
+              <input value={formData.venue || ''} onChange={e => setFormData({ ...formData, venue: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Description</label>
+              <textarea value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Ticket Price ($)</label>
+              <input type="number" step="0.01" min="0" value={formData.ticket_price || ''} onChange={e => setFormData({ ...formData, ticket_price: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Fair Market Value of Goods/Services ($) — triggers quid pro quo disclosure</label>
+              <input type="number" step="0.01" min="0" value={formData.fmv || ''} onChange={e => setFormData({ ...formData, fmv: e.target.value })} />
+            </div>
+            {formData.ticket_price && formData.fmv && parseFloat(formData.fmv) > 0 && (
+              <div className="alert-banner alert-warning" style={{ marginBottom: 14 }}>
+                Tax-deductible per ticket: ${(Math.max(0, parseFloat(formData.ticket_price || 0) - parseFloat(formData.fmv || 0))).toFixed(2)}. IRS QPQ disclosure required for payments over $75.
+              </div>
+            )}
+            <div className="form-group">
+              <label>Capacity (leave blank for unlimited)</label>
+              <input type="number" min="1" value={formData.capacity || ''} onChange={e => setFormData({ ...formData, capacity: e.target.value })} />
+            </div>
+            <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={formData.is_active !== false} onChange={e => setFormData({ ...formData, is_active: e.target.checked })} style={{ width: 'auto' }} />
+              <label style={{ margin: 0 }}>Active event</label>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowEventModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSaveEvent} disabled={saving || !formData.name || !formData.event_date}>{saving ? 'Saving...' : (showEventModal.id ? 'Save' : 'Create Event')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD ATTENDEE MODAL */}
+      {showAttendeeModal && (
+        <div className="modal-overlay" onClick={() => setShowAttendeeModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Add Attendee</h3>
+            <div className="form-group">
+              <label>Name</label>
+              <input value={formData.att_name || ''} onChange={e => setFormData({ ...formData, att_name: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Email</label>
+              <input type="email" value={formData.att_email || ''} onChange={e => setFormData({ ...formData, att_email: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Ticket Type</label>
+              <select value={formData.att_type || 'general'} onChange={e => setFormData({ ...formData, att_type: e.target.value })}>
+                <option value="general">General</option>
+                <option value="vip">VIP</option>
+                <option value="sponsor">Sponsor</option>
+                <option value="complimentary">Complimentary</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Ticket Price ($)</label>
+              <input type="number" step="0.01" min="0" value={formData.att_price || ''} onChange={e => setFormData({ ...formData, att_price: e.target.value })} />
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowAttendeeModal(false)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleAddAttendee} disabled={saving || !formData.att_name}>{saving ? 'Adding...' : 'Add Attendee'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LINK DONATION MODAL */}
+      {showLinkModal && (
+        <div className="modal-overlay" onClick={() => setShowLinkModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 600 }}>
+            <h3>Link Donation to Event</h3>
+            {detail?.event?.fair_market_value_cents > 0 && (
+              <div className="alert-banner alert-warning" style={{ marginBottom: 14 }}>
+                Linking will apply quid pro quo: FMV {fmt(detail.event.fair_market_value_cents)} will be deducted from tax-deductible amount for donations over $75.
+              </div>
+            )}
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Receipt #</th><th>Donor</th><th>Amount</th><th>Date</th><th>Action</th></tr></thead>
+                <tbody>
+                  {linkDonations.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', padding: 20, color: 'var(--text-dim)' }}>No unlinked donations available</td></tr>}
+                  {linkDonations.map(d => (
+                    <tr key={d.id}>
+                      <td className="td-mono">{d.receipt_number || '—'}</td>
+                      <td className="td-primary">{d.donor ? `${d.donor.first_name} ${d.donor.last_name}` : '—'}</td>
+                      <td className="td-mono">{fmt(d.amount_cents)}</td>
+                      <td>{fmtDate(d.donated_at)}</td>
+                      <td><button className="btn btn-gold btn-sm" onClick={() => handleLinkDonation(d.id)}>Link</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="modal-actions" style={{ marginTop: 12 }}>
+              <button className="btn btn-ghost" onClick={() => setShowLinkModal(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════ */
 export default function App() {
@@ -2456,6 +2925,7 @@ export default function App() {
             <NavLink to="/recurring"><span className="nav-icon">↻</span> Recurring</NavLink>
             <NavLink to="/compliance"><span className="nav-icon">◇</span> Compliance</NavLink>
             <NavLink to="/matching"><span className="nav-icon">⬡</span> Matching</NavLink>
+            <NavLink to="/events"><span className="nav-icon">◆</span> Events</NavLink>
           </nav>
 
           <div className="sidebar-footer">
@@ -2472,6 +2942,7 @@ export default function App() {
             <Route path="/recurring" element={<RecurringView />} />
             <Route path="/compliance" element={<ComplianceView />} />
             <Route path="/matching" element={<MatchingView />} />
+            <Route path="/events" element={<EventsView />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>
