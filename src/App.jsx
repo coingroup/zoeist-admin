@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL, FUNDRAISING_API_URL } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL, FUNDRAISING_API_URL, ADMIN_EXTRAS_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -3382,6 +3382,410 @@ function FundraisingView() {
 }
 
 /* ═══════════════════════════════════════════
+   ADMIN EXTRAS — Letters, Comms, Refunds, Board Report
+   ═══════════════════════════════════════════ */
+function AdminExtrasView() {
+  const [tab, setTab] = useState('letters');
+  const [letters, setLetters] = useState([]);
+  const [comms, setComms] = useState([]);
+  const [report, setReport] = useState(null);
+  const [reportYear, setReportYear] = useState(new Date().getFullYear());
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [showModal, setShowModal] = useState(null);
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [showRefundModal, setShowRefundModal] = useState(false);
+  const [formData, setFormData] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [donors, setDonors] = useState([]);
+  const [donations, setDonations] = useState([]);
+
+  const loadLetters = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await adminFetch(`${ADMIN_EXTRAS_API_URL}/letters?page=${page}&limit=25`);
+      setLetters(data.letters || []);
+      setTotalPages(data.totalPages || 1);
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  }, [page]);
+
+  const loadComms = async () => {
+    setLoading(true);
+    try {
+      const data = await adminFetch(`${ADMIN_EXTRAS_API_URL}/communications`);
+      setComms(data.preferences || []);
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  };
+
+  const loadReport = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await adminFetch(`${ADMIN_EXTRAS_API_URL}/board-report?year=${reportYear}`);
+      setReport(data);
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  }, [reportYear]);
+
+  const loadDonorsAndDonations = async () => {
+    try {
+      const d = await adminFetch('donors?limit=500');
+      setDonors(d.donors || []);
+      const dn = await adminFetch('donations?limit=500');
+      setDonations((dn.donations || []).filter(x => x.status === 'succeeded'));
+    } catch (err) { console.error(err); }
+  };
+
+  useEffect(() => { if (tab === 'letters') loadLetters(); }, [tab, loadLetters]);
+  useEffect(() => { if (tab === 'comms') loadComms(); }, [tab]);
+  useEffect(() => { if (tab === 'report') loadReport(); }, [tab, loadReport]);
+
+  const handleSaveLetter = async () => {
+    setSaving(true);
+    try {
+      if (showModal?.id) {
+        await adminFetch(`${ADMIN_EXTRAS_API_URL}/letter/${showModal.id}`, { method: 'PUT', body: JSON.stringify(formData) });
+      } else {
+        await adminFetch(`${ADMIN_EXTRAS_API_URL}/letter`, { method: 'POST', body: JSON.stringify(formData) });
+      }
+      setShowModal(null); setFormData({}); loadLetters();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleDeleteLetter = async (id) => {
+    if (!confirm('Delete this acknowledgment letter?')) return;
+    try {
+      await adminFetch(`${ADMIN_EXTRAS_API_URL}/letter/${id}`, { method: 'DELETE' });
+      loadLetters();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const handleMarkSent = async (id, via) => {
+    try {
+      await adminFetch(`${ADMIN_EXTRAS_API_URL}/letter/${id}`, { method: 'PUT', body: JSON.stringify({ mark_sent: true, sent_via: via }) });
+      loadLetters();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const handleBatch = async () => {
+    setSaving(true);
+    try {
+      const result = await adminFetch(`${ADMIN_EXTRAS_API_URL}/letters/batch`, { method: 'POST', body: JSON.stringify({ since: formData.since, signed_by: formData.signed_by }) });
+      alert(`Created ${result.created} acknowledgment letters`);
+      setShowBatchModal(false); setFormData({}); loadLetters();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleRefund = async () => {
+    setSaving(true);
+    try {
+      const body = { donation_id: formData.donation_id, reason: formData.reason };
+      if (formData.partial_amount) body.amount_cents = parseCents(formData.partial_amount);
+      const result = await adminFetch(`${ADMIN_EXTRAS_API_URL}/refund`, { method: 'POST', body: JSON.stringify(body) });
+      alert(`Refunded ${fmt(result.refunded_cents)}${result.partial ? ' (partial)' : ''}`);
+      setShowRefundModal(false); setFormData({});
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleToggleComm = async (id, currentVal) => {
+    try {
+      await adminFetch(`${ADMIN_EXTRAS_API_URL}/communication/${id}`, { method: 'PUT', body: JSON.stringify({ opted_in: !currentVal }) });
+      loadComms();
+    } catch (err) { alert('Failed: ' + err.message); }
+  };
+
+  const tierColors = { standard: '#8b8899', bronze: '#cd7f32', silver: '#c0c0c0', gold: '#c8a855', platinum: '#e5e4e2' };
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Admin Tools</h2>
+        <p>Acknowledgment letters, communication preferences, refunds & board reports</p>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {[['letters', 'Letters'], ['refunds', 'Refunds'], ['comms', 'Communications'], ['report', 'Board Report']].map(([k, label]) => (
+          <button key={k} className={`btn ${tab === k ? 'btn-gold' : 'btn-ghost'}`} onClick={() => setTab(k)}>{label}</button>
+        ))}
+      </div>
+
+      {/* ─── LETTERS TAB ─── */}
+      {tab === 'letters' && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 600 }}>Acknowledgment Letters</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => { setShowBatchModal(true); setFormData({ since: `${new Date().getFullYear()}-01-01` }); }}>Batch Generate</button>
+              <button className="btn btn-gold" onClick={() => { loadDonorsAndDonations(); setShowModal({}); setFormData({}); }}>+ New Letter</button>
+            </div>
+          </div>
+          {loading ? <p style={{ color: 'var(--text-muted)', padding: 20 }}>Loading...</p> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Donor</th><th>Donation</th><th>Tier</th><th>Sent</th><th>Signed By</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {letters.map(l => (
+                    <tr key={l.id}>
+                      <td className="td-primary">{l.donor?.first_name} {l.donor?.last_name}</td>
+                      <td className="td-mono">{l.donation ? `${l.donation.receipt_number} — ${fmt(l.donation.amount_cents)}` : '—'}</td>
+                      <td><span style={{ color: tierColors[l.template_tier] || '#8b8899', fontWeight: 600, fontSize: 12, textTransform: 'uppercase' }}>{l.template_tier}</span></td>
+                      <td>{l.sent_at ? <span className="badge badge-green">{l.sent_via || 'sent'} — {new Date(l.sent_at).toLocaleDateString()}</span> : <span className="badge badge-dim">unsent</span>}</td>
+                      <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{l.signed_by || '—'}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          {!l.sent_at && <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }} onClick={() => handleMarkSent(l.id, 'email')}>Mark Sent</button>}
+                          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }} onClick={() => { loadDonorsAndDonations(); setShowModal(l); setFormData({ template_tier: l.template_tier, sent_via: l.sent_via, signed_by: l.signed_by }); }}>Edit</button>
+                          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 8px', color: 'var(--red)' }} onClick={() => handleDeleteLetter(l.id)}>Del</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {letters.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 32 }}>No acknowledgment letters yet</td></tr>}
+                </tbody>
+              </table>
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 8, padding: 16 }}>
+                  <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</button>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 13, padding: '8px 0' }}>Page {page} of {totalPages}</span>
+                  <button className="btn btn-ghost" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── REFUNDS TAB ─── */}
+      {tab === 'refunds' && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 600 }}>Process Refund</h3>
+            <button className="btn btn-gold" onClick={() => { loadDonorsAndDonations(); setShowRefundModal(true); setFormData({}); }}>+ New Refund</button>
+          </div>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Process full or partial refunds through Stripe. Refunds automatically void associated receipts and update donor totals.
+          </p>
+          <div style={{ marginTop: 16, padding: 16, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <p style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 8 }}>Refund workflow:</p>
+            <ol style={{ color: 'var(--text-muted)', fontSize: 12, paddingLeft: 20, lineHeight: 1.8 }}>
+              <li>Select a donation to refund</li>
+              <li>Choose full or partial refund amount</li>
+              <li>Stripe processes the refund automatically</li>
+              <li>Receipt is voided, donor totals recalculated</li>
+              <li>Action logged in audit trail</li>
+            </ol>
+          </div>
+        </div>
+      )}
+
+      {/* ─── COMMUNICATIONS TAB ─── */}
+      {tab === 'comms' && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 600 }}>Communication Preferences</h3>
+          </div>
+          {loading ? <p style={{ color: 'var(--text-muted)', padding: 20 }}>Loading...</p> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Donor</th><th>Channel</th><th>Category</th><th>Opted In</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {comms.map(c => (
+                    <tr key={c.id}>
+                      <td className="td-primary">{c.donor?.first_name} {c.donor?.last_name}</td>
+                      <td>{c.channel}</td>
+                      <td>{c.category}</td>
+                      <td>{c.opted_in ? <span className="badge badge-green">Yes</span> : <span className="badge badge-red">No</span>}</td>
+                      <td>
+                        <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }} onClick={() => handleToggleComm(c.id, c.opted_in)}>
+                          {c.opted_in ? 'Opt Out' : 'Opt In'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {comms.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 32 }}>No communication preferences configured</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── BOARD REPORT TAB ─── */}
+      {tab === 'report' && (
+        <div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
+            <select value={reportYear} onChange={e => setReportYear(parseInt(e.target.value))} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+              {[2026, 2025, 2024, 2023].map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <button className="btn btn-ghost" onClick={loadReport}>Refresh</button>
+          </div>
+
+          {loading ? <p style={{ color: 'var(--text-muted)', padding: 20 }}>Loading report...</p> : report && (
+            <>
+              <div className="kpi-grid">
+                <div className="card"><div className="card-title">Gross Donations</div><div className="card-value">{fmt(report.donations.total_cents)}</div><div className="card-sub">{report.donations.count} donations</div></div>
+                <div className="card"><div className="card-title">Net (After Refunds)</div><div className="card-value">{fmt(report.donations.net_cents)}</div><div className="card-sub">{fmt(report.donations.refund_cents)} refunded</div></div>
+                <div className="card"><div className="card-title">Total Donors</div><div className="card-value">{report.donors.total}</div><div className="card-sub">{report.donors.new_this_year} new in {report.year}</div></div>
+                <div className="card"><div className="card-title">Recurring MRR</div><div className="card-value">{fmt(report.recurring.mrr_cents)}</div><div className="card-sub">ARR: {fmt(report.recurring.arr_cents)} · {report.recurring.active_count} active</div></div>
+              </div>
+
+              <div className="charts-grid">
+                <div className="card">
+                  <div className="card-title">Donations by Month</div>
+                  <div style={{ height: 260 }}>
+                    <ResponsiveContainer>
+                      <BarChart data={report.donations.by_month.map(m => ({ ...m, amount: m.total / 100 }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                        <XAxis dataKey="month" tick={{ fill: 'var(--text-dim)', fontSize: 11 }} />
+                        <YAxis tick={{ fill: 'var(--text-dim)', fontSize: 11 }} tickFormatter={v => `$${v.toLocaleString()}`} />
+                        <Tooltip formatter={v => [`$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Amount']} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} />
+                        <Bar dataKey="amount" fill="var(--gold)" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="card-title">By Designation</div>
+                  <div style={{ height: 260 }}>
+                    <ResponsiveContainer>
+                      <PieChart>
+                        <Pie data={report.donations.by_designation.map(d => ({ ...d, value: d.total / 100 }))} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, value }) => `${name}: $${value.toLocaleString()}`}>
+                          {report.donations.by_designation.map((_, i) => <Cell key={i} fill={['#c8a855', '#60a5fa', '#4ade80', '#f87171', '#a78bfa', '#fb923c'][i % 6]} />)}
+                        </Pie>
+                        <Tooltip formatter={v => [`$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Amount']} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+
+              <div className="kpi-grid">
+                <div className="card"><div className="card-title">Active Grants</div><div className="card-value">{report.grants.active_count}</div><div className="card-sub">Total awarded: {fmt(report.grants.total_awarded_cents)}</div></div>
+                <div className="card"><div className="card-title">Active Pledges</div><div className="card-value">{report.pledges.active_count}</div><div className="card-sub">Pledged: {fmt(report.pledges.total_pledged_cents)} · Paid: {fmt(report.pledges.total_paid_cents)}</div></div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ─── NEW/EDIT LETTER MODAL ─── */}
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{showModal.id ? 'Edit Letter' : 'New Acknowledgment Letter'}</h3>
+            {!showModal.id && (
+              <>
+                <div className="form-group">
+                  <label>Donor *</label>
+                  <select value={formData.donor_id || ''} onChange={e => setFormData({ ...formData, donor_id: e.target.value })}>
+                    <option value="">Select donor...</option>
+                    {donors.map(d => <option key={d.id} value={d.id}>{d.first_name} {d.last_name} — {d.email}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Donation (optional)</label>
+                  <select value={formData.donation_id || ''} onChange={e => setFormData({ ...formData, donation_id: e.target.value })}>
+                    <option value="">No specific donation</option>
+                    {donations.filter(d => !formData.donor_id || d.donor_id === formData.donor_id).map(d => <option key={d.id} value={d.id}>{d.receipt_number} — {fmt(d.amount_cents)}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
+            <div className="form-group">
+              <label>Tier</label>
+              <select value={formData.template_tier || ''} onChange={e => setFormData({ ...formData, template_tier: e.target.value })}>
+                <option value="">Auto-detect from donor total</option>
+                <option value="standard">Standard (&lt; $1K)</option>
+                <option value="bronze">Bronze ($1K+)</option>
+                <option value="silver">Silver ($5K+)</option>
+                <option value="gold">Gold ($25K+)</option>
+                <option value="platinum">Platinum ($100K+)</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Sent Via</label>
+              <select value={formData.sent_via || ''} onChange={e => setFormData({ ...formData, sent_via: e.target.value })}>
+                <option value="">Not yet sent</option>
+                <option value="email">Email</option>
+                <option value="mail">Mail</option>
+                <option value="in_person">In Person</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Signed By</label>
+              <input value={formData.signed_by || ''} onChange={e => setFormData({ ...formData, signed_by: e.target.value })} placeholder="Executive Director" />
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSaveLetter} disabled={saving || (!showModal.id && !formData.donor_id)}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── BATCH MODAL ─── */}
+      {showBatchModal && (
+        <div className="modal-overlay" onClick={() => setShowBatchModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Batch Generate Letters</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>Generate acknowledgment letters for all donations since a given date that don't already have one.</p>
+            <div className="form-group">
+              <label>Since Date *</label>
+              <input type="date" value={formData.since || ''} onChange={e => setFormData({ ...formData, since: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Signed By</label>
+              <input value={formData.signed_by || ''} onChange={e => setFormData({ ...formData, signed_by: e.target.value })} placeholder="Executive Director" />
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowBatchModal(false)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleBatch} disabled={saving || !formData.since}>{saving ? 'Generating...' : 'Generate'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── REFUND MODAL ─── */}
+      {showRefundModal && (
+        <div className="modal-overlay" onClick={() => setShowRefundModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Process Refund</h3>
+            <div className="form-group">
+              <label>Donation *</label>
+              <select value={formData.donation_id || ''} onChange={e => setFormData({ ...formData, donation_id: e.target.value })}>
+                <option value="">Select donation...</option>
+                {donations.map(d => <option key={d.id} value={d.id}>{d.receipt_number} — {fmt(d.amount_cents)} ({d.donor?.first_name} {d.donor?.last_name})</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Partial Amount (leave blank for full refund)</label>
+              <DollarInput value={formData.partial_amount || ''} onChange={v => setFormData({ ...formData, partial_amount: v })} placeholder="0.00" />
+            </div>
+            <div className="form-group">
+              <label>Reason</label>
+              <input value={formData.reason || ''} onChange={e => setFormData({ ...formData, reason: e.target.value })} placeholder="Reason for refund" />
+            </div>
+            <div style={{ padding: '12px 16px', background: 'var(--red-bg)', borderRadius: 8, marginBottom: 16, fontSize: 12, color: 'var(--red)' }}>
+              This will process a refund through Stripe, void the receipt, and update donor totals. This action cannot be undone.
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowRefundModal(false)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleRefund} disabled={saving || !formData.donation_id}>{saving ? 'Processing...' : 'Process Refund'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════ */
 export default function App() {
@@ -3435,6 +3839,7 @@ export default function App() {
             <NavLink to="/matching"><span className="nav-icon">⬡</span> Matching</NavLink>
             <NavLink to="/events"><span className="nav-icon">◆</span> Events</NavLink>
             <NavLink to="/fundraising"><span className="nav-icon">▣</span> Fundraising</NavLink>
+            <NavLink to="/admin-tools"><span className="nav-icon">⚙</span> Admin Tools</NavLink>
           </nav>
 
           <div className="sidebar-footer">
@@ -3453,6 +3858,7 @@ export default function App() {
             <Route path="/matching" element={<MatchingView />} />
             <Route path="/events" element={<EventsView />} />
             <Route path="/fundraising" element={<FundraisingView />} />
+            <Route path="/admin-tools" element={<AdminExtrasView />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>

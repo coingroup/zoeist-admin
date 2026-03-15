@@ -14,6 +14,7 @@ export const COMPLIANCE_FIN_STMT_URL = `${supabaseUrl}/functions/v1/compliance-f
 export const MATCHING_GIFTS_API_URL = `${supabaseUrl}/functions/v1/matching-gifts-api`;
 export const EVENTS_API_URL = `${supabaseUrl}/functions/v1/events-api`;
 export const FUNDRAISING_API_URL = `${supabaseUrl}/functions/v1/fundraising-api`;
+export const ADMIN_EXTRAS_API_URL = `${supabaseUrl}/functions/v1/admin-extras-api`;
 
 export async function adminFetch(path, options = {}) {
   const { data: { session } } = await supabase.auth.getSession();
