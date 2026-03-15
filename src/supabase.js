@@ -15,6 +15,7 @@ export const MATCHING_GIFTS_API_URL = `${supabaseUrl}/functions/v1/matching-gift
 export const EVENTS_API_URL = `${supabaseUrl}/functions/v1/events-api`;
 export const FUNDRAISING_API_URL = `${supabaseUrl}/functions/v1/fundraising-api`;
 export const ADMIN_EXTRAS_API_URL = `${supabaseUrl}/functions/v1/admin-extras-api`;
+export const ACCOUNTING_API_URL = `${supabaseUrl}/functions/v1/accounting-api`;
 
 export async function adminFetch(path, options = {}) {
   const { data: { session } } = await supabase.auth.getSession();
@@ -30,7 +31,8 @@ export async function adminFetch(path, options = {}) {
     },
   });
 
-  if (res.headers.get('Content-Type')?.includes('text/csv')) {
+  const ct = res.headers.get('Content-Type') || '';
+  if (ct.includes('text/csv') || ct.includes('text/plain')) {
     return res;
   }
 
