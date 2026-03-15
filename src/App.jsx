@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL, FUNDRAISING_API_URL, ADMIN_EXTRAS_API_URL, ACCOUNTING_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
@@ -237,7 +237,6 @@ function DollarInput({ value, onChange, placeholder }) {
 }
 
 const CHART_GOLD = '#c8a855';
-const CHART_COLORS = ['#c8a855', '#60a5fa', '#4ade80', '#f87171', '#a78bfa', '#fb923c'];
 const PIE_COLORS = ['#c8a855', '#60a5fa', '#4ade80', '#f87171', '#a78bfa'];
 
 /* ═══════════════════════════════════════════
