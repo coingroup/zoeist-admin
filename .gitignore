@@ -1,5 +1,27 @@
+# Environment
 .env.txt
 .env
+.env.local
+.env.*.local
+
+# Dependencies
 node_modules/
+
+# Build
 dist/
+
+# Lock files
 package-lock.json
+
+# Supabase
+supabase/.temp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Claude Code
+.claude/settings.local.json
