@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL, FUNDRAISING_API_URL, ADMIN_EXTRAS_API_URL } from './supabase';
+import { supabase, adminFetch, YEAR_END_API_URL, RECURRING_API_URL, COMPLIANCE_REPORTS_URL, COMPLIANCE_ALERTS_URL, COMPLIANCE_FIN_STMT_URL, MATCHING_GIFTS_API_URL, EVENTS_API_URL, FUNDRAISING_API_URL, ADMIN_EXTRAS_API_URL, ACCOUNTING_API_URL } from './supabase';
 
 /* ═══════════════════════════════════════════
    STYLES
@@ -3786,6 +3786,330 @@ function AdminExtrasView() {
 }
 
 /* ═══════════════════════════════════════════
+   ACCOUNTING & SYSTEM CONFIG
+   ═══════════════════════════════════════════ */
+function AccountingView() {
+  const [tab, setTab] = useState('export');
+  const [config, setConfig] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [mappings, setMappings] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [saving, setSaving] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(null);
+  const [formData, setFormData] = useState({});
+
+  const loadConfig = async () => {
+    try {
+      const data = await adminFetch(`${ACCOUNTING_API_URL}/config`);
+      setConfig(data.config || {});
+    } catch (err) { console.error(err); }
+  };
+
+  const loadMappings = async () => {
+    try {
+      const data = await adminFetch(`${ACCOUNTING_API_URL}/mappings`);
+      setMappings(data.mappings || {});
+    } catch (err) { console.error(err); }
+  };
+
+  const loadSummary = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await adminFetch(`${ACCOUNTING_API_URL}/fiscal-summary?year=${year}`);
+      setSummary(data);
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  }, [year]);
+
+  useEffect(() => { loadConfig(); loadMappings(); }, []);
+  useEffect(() => { if (tab === 'export' || tab === 'summary') loadSummary(); }, [tab, loadSummary]);
+
+  const handleExport = async (format) => {
+    try {
+      const res = await adminFetch(`${ACCOUNTING_API_URL}/export/${format}?year=${year}`);
+      if (res instanceof Response) {
+        const blob = await res.blob();
+        const ext = format === 'quickbooks' ? 'iif' : 'csv';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `zoeist-${format}-${year}.${ext}`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) { alert('Export failed: ' + err.message); }
+  };
+
+  const handleSaveConfig = async () => {
+    setSaving(true);
+    try {
+      await adminFetch(`${ACCOUNTING_API_URL}/config/${showConfigModal}`, { method: 'PUT', body: JSON.stringify({ value: formData.value }) });
+      setShowConfigModal(null);
+      setFormData({});
+      loadConfig();
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleSaveMappings = async () => {
+    setSaving(true);
+    try {
+      await adminFetch(`${ACCOUNTING_API_URL}/mappings`, { method: 'PUT', body: JSON.stringify({ mappings }) });
+      alert('Account mappings saved');
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const handleUpdateFiscalYear = async () => {
+    setSaving(true);
+    try {
+      await adminFetch(`${ACCOUNTING_API_URL}/config/fiscal_year`, {
+        method: 'PUT',
+        body: JSON.stringify({ value: { start_month: parseInt(formData.start_month), start_day: parseInt(formData.start_day), end_month: parseInt(formData.end_month), end_day: parseInt(formData.end_day) } }),
+      });
+      setShowConfigModal(null);
+      setFormData({});
+      loadConfig();
+      loadSummary();
+      alert('Fiscal year updated');
+    } catch (err) { alert('Failed: ' + err.message); }
+    setSaving(false);
+  };
+
+  const fy = config?.fiscal_year || { start_month: 1, start_day: 1, end_month: 12, end_day: 31 };
+  const monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  return (
+    <>
+      <div className="page-header">
+        <h2>Accounting & Settings</h2>
+        <p>Export to QuickBooks/Xero, configure fiscal year & account mappings</p>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {[['export', 'Export'], ['summary', 'Fiscal Summary'], ['mappings', 'Account Mappings'], ['config', 'System Config']].map(([k, label]) => (
+          <button key={k} className={`btn ${tab === k ? 'btn-gold' : 'btn-ghost'}`} onClick={() => setTab(k)}>{label}</button>
+        ))}
+      </div>
+
+      {/* ─── EXPORT TAB ─── */}
+      {tab === 'export' && (
+        <div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
+            <select value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+              {[2026, 2025, 2024, 2023].map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+              Fiscal year: {monthNames[fy.start_month]} {fy.start_day} – {monthNames[fy.end_month]} {fy.end_day}
+            </span>
+          </div>
+
+          <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+            <div className="card" style={{ cursor: 'pointer' }} onClick={() => handleExport('quickbooks')}>
+              <div className="card-title">QuickBooks IIF</div>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📗</div>
+              <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>IIF import file with double-entry journal entries. Includes cash donations, refunds, and in-kind contributions.</p>
+              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }}>Download .iif</button>
+            </div>
+
+            <div className="card" style={{ cursor: 'pointer' }} onClick={() => handleExport('xero')}>
+              <div className="card-title">Xero CSV</div>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📘</div>
+              <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>CSV invoice import for Xero. Maps donations to account codes with tax-exempt designation.</p>
+              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }}>Download .csv</button>
+            </div>
+
+            <div className="card" style={{ cursor: 'pointer' }} onClick={() => handleExport('generic')}>
+              <div className="card-title">Generic CSV</div>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
+              <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>Comprehensive CSV with all donation details, in-kind contributions, and grant data for any accounting system.</p>
+              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }}>Download .csv</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── FISCAL SUMMARY TAB ─── */}
+      {tab === 'summary' && (
+        <div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
+            <select value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+              {[2026, 2025, 2024, 2023].map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <button className="btn btn-ghost" onClick={loadSummary}>Refresh</button>
+          </div>
+
+          {loading ? <p style={{ color: 'var(--text-muted)', padding: 20 }}>Loading...</p> : summary && (
+            <>
+              <div className="kpi-grid">
+                <div className="card"><div className="card-title">Gross Cash Donations</div><div className="card-value">{fmt(summary.cash_donations.gross_cents)}</div><div className="card-sub">{summary.cash_donations.count} transactions</div></div>
+                <div className="card"><div className="card-title">Net (After Refunds)</div><div className="card-value">{fmt(summary.cash_donations.net_cents)}</div><div className="card-sub">{fmt(summary.cash_donations.refund_cents)} refunded</div></div>
+                <div className="card"><div className="card-title">In-Kind Contributions</div><div className="card-value">{fmt(summary.in_kind.total_cents)}</div><div className="card-sub">{summary.in_kind.count} items</div></div>
+                <div className="card"><div className="card-title">Total Revenue</div><div className="card-value" style={{ color: 'var(--gold)' }}>{fmt(summary.total_revenue_cents)}</div><div className="card-sub">Cash + In-Kind</div></div>
+              </div>
+
+              <div className="kpi-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                <div className="card"><div className="card-title">Active Grants</div><div className="card-value">{summary.grants.active}</div><div className="card-sub">Awarded: {fmt(summary.grants.total_awarded_cents)}</div></div>
+                <div className="card"><div className="card-title">Recurring Revenue</div><div className="card-value">{fmt(summary.recurring.mrr_cents)}/mo</div><div className="card-sub">ARR: {fmt(summary.recurring.arr_cents)} · {summary.recurring.active} active</div></div>
+              </div>
+
+              {summary.by_designation.length > 0 && (
+                <div className="card" style={{ marginTop: 16 }}>
+                  <div className="card-title" style={{ marginBottom: 12 }}>Revenue by Designation</div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead><tr><th>Designation</th><th>Count</th><th>Gross</th><th>Refunds</th><th>Net</th></tr></thead>
+                      <tbody>
+                        {summary.by_designation.map(d => (
+                          <tr key={d.name}>
+                            <td className="td-primary">{d.name}</td>
+                            <td>{d.count}</td>
+                            <td className="td-mono">{fmt(d.gross)}</td>
+                            <td className="td-mono" style={{ color: d.refunds > 0 ? 'var(--red)' : undefined }}>{fmt(d.refunds)}</td>
+                            <td className="td-mono" style={{ fontWeight: 600 }}>{fmt(d.net)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ─── ACCOUNT MAPPINGS TAB ─── */}
+      {tab === 'mappings' && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div>
+              <h3 style={{ fontSize: 15, fontWeight: 600 }}>Chart of Accounts Mapping</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>Map fund designations to accounting software account codes</p>
+            </div>
+            <button className="btn btn-gold" onClick={handleSaveMappings} disabled={saving}>{saving ? 'Saving...' : 'Save Mappings'}</button>
+          </div>
+
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="form-group">
+                <label>Default Bank Account (QB)</label>
+                <input value={mappings._default_bank || ''} onChange={e => setMappings({ ...mappings, _default_bank: e.target.value })} placeholder="1000 · Checking" />
+              </div>
+              <div className="form-group">
+                <label>Default Income Account (QB)</label>
+                <input value={mappings._default_income || ''} onChange={e => setMappings({ ...mappings, _default_income: e.target.value })} placeholder="4000 · Contribution Revenue" />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="form-group">
+                <label>In-Kind Account (QB)</label>
+                <input value={mappings._inkind || ''} onChange={e => setMappings({ ...mappings, _inkind: e.target.value })} placeholder="4100 · In-Kind Contributions" />
+              </div>
+              <div className="form-group">
+                <label>Default Income Code (Xero)</label>
+                <input value={mappings._default_income_code || ''} onChange={e => setMappings({ ...mappings, _default_income_code: e.target.value })} placeholder="200" />
+              </div>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 8 }}>
+              <p style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 12 }}>Per-Designation Overrides (leave blank to use default)</p>
+              {['General Fund', 'Youth Programs', 'Education', 'Community Development'].map(desig => (
+                <div key={desig} style={{ display: 'grid', gridTemplateColumns: '180px 1fr 1fr', gap: 12, marginBottom: 8, alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{desig}</span>
+                  <input value={mappings[desig] || ''} onChange={e => setMappings({ ...mappings, [desig]: e.target.value })} placeholder="QB Account" style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 10px', borderRadius: 6, fontSize: 12 }} />
+                  <input value={mappings[`xero_${desig}`] || ''} onChange={e => setMappings({ ...mappings, [`xero_${desig}`]: e.target.value })} placeholder="Xero Code" style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 10px', borderRadius: 6, fontSize: 12 }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── SYSTEM CONFIG TAB ─── */}
+      {tab === 'config' && (
+        <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div>
+                <h3 style={{ fontSize: 15, fontWeight: 600 }}>Fiscal Year</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>Current: {monthNames[fy.start_month]} {fy.start_day} – {monthNames[fy.end_month]} {fy.end_day}</p>
+              </div>
+              <button className="btn btn-ghost" onClick={() => { setShowConfigModal('fiscal_year'); setFormData({ start_month: String(fy.start_month), start_day: String(fy.start_day), end_month: String(fy.end_month), end_day: String(fy.end_day) }); }}>Edit</button>
+            </div>
+          </div>
+
+          {config && Object.entries(config).filter(([k]) => k !== 'fiscal_year' && k !== 'account_mappings').map(([key, value]) => (
+            <div className="card" key={key} style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h3 style={{ fontSize: 14, fontWeight: 600 }}>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</h3>
+                  <pre style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 8, whiteSpace: 'pre-wrap', fontFamily: 'var(--mono)', maxHeight: 120, overflow: 'auto' }}>{JSON.stringify(value, null, 2)}</pre>
+                </div>
+                <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => { setShowConfigModal(key); setFormData({ value }); }}>Edit</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ─── FISCAL YEAR MODAL ─── */}
+      {showConfigModal === 'fiscal_year' && (
+        <div className="modal-overlay" onClick={() => setShowConfigModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Configure Fiscal Year</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="form-group">
+                <label>Start Month</label>
+                <select value={formData.start_month || '1'} onChange={e => setFormData({ ...formData, start_month: e.target.value })}>
+                  {monthNames.slice(1).map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Start Day</label>
+                <input type="number" min="1" max="31" value={formData.start_day || '1'} onChange={e => setFormData({ ...formData, start_day: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>End Month</label>
+                <select value={formData.end_month || '12'} onChange={e => setFormData({ ...formData, end_month: e.target.value })}>
+                  {monthNames.slice(1).map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>End Day</label>
+                <input type="number" min="1" max="31" value={formData.end_day || '31'} onChange={e => setFormData({ ...formData, end_day: e.target.value })} />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowConfigModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleUpdateFiscalYear} disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── GENERIC CONFIG EDIT MODAL ─── */}
+      {showConfigModal && showConfigModal !== 'fiscal_year' && (
+        <div className="modal-overlay" onClick={() => setShowConfigModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Edit {showConfigModal.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</h3>
+            <div className="form-group">
+              <label>Value (JSON)</label>
+              <textarea value={typeof formData.value === 'string' ? formData.value : JSON.stringify(formData.value, null, 2)} onChange={e => { try { setFormData({ value: JSON.parse(e.target.value) }); } catch { setFormData({ value: e.target.value }); } }} style={{ minHeight: 200, fontFamily: 'var(--mono)', fontSize: 12 }} />
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowConfigModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSaveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════ */
 export default function App() {
@@ -3840,6 +4164,7 @@ export default function App() {
             <NavLink to="/events"><span className="nav-icon">◆</span> Events</NavLink>
             <NavLink to="/fundraising"><span className="nav-icon">▣</span> Fundraising</NavLink>
             <NavLink to="/admin-tools"><span className="nav-icon">⚙</span> Admin Tools</NavLink>
+            <NavLink to="/accounting"><span className="nav-icon">☰</span> Accounting</NavLink>
           </nav>
 
           <div className="sidebar-footer">
@@ -3859,6 +4184,7 @@ export default function App() {
             <Route path="/events" element={<EventsView />} />
             <Route path="/fundraising" element={<FundraisingView />} />
             <Route path="/admin-tools" element={<AdminExtrasView />} />
+            <Route path="/accounting" element={<AccountingView />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>
