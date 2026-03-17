@@ -192,10 +192,14 @@ serve(async (req: Request) => {
 
       if (error || !receipt) return json({ error: 'Receipt not found' }, 404);
 
+      // Configurable expiry from system_config
+      const { data: expiryConfig } = await supabase.from('system_config').select('value').eq('key', 'receipt_url_expiry').single();
+      const singleExpiry = (expiryConfig?.value as any)?.single_seconds || 300;
+
       const { data: signedUrl } = await supabase
         .storage
         .from('donation-receipts')
-        .createSignedUrl(receipt.pdf_storage_path, 300); // 5 min expiry
+        .createSignedUrl(receipt.pdf_storage_path, singleExpiry);
 
       if (!signedUrl) return json({ error: 'Could not generate download URL' }, 500);
       return json({ url: signedUrl.signedUrl });
@@ -259,6 +263,80 @@ serve(async (req: Request) => {
       }
 
       return json({ error: 'Use /subscription/:id/pause, /resume, or /cancel' }, 400);
+    }
+
+    // ─── GET /receipts-bulk?tax_year=YYYY ───
+    if (req.method === 'GET' && action === 'receipts-bulk') {
+      const taxYear = url.searchParams.get('tax_year');
+      if (!taxYear) return json({ error: 'tax_year parameter required' }, 400);
+
+      const { data: receipts, error } = await supabase
+        .from('donation_receipts')
+        .select('id, receipt_number, pdf_storage_path, receipt_type')
+        .eq('donor_id', donor.id)
+        .eq('tax_year', parseInt(taxYear))
+        .is('voided_at', null);
+
+      if (error) return json({ error: error.message }, 500);
+      if (!receipts || receipts.length === 0) return json({ error: 'No receipts found for this tax year' }, 404);
+
+      // Configurable expiry from system_config
+      const { data: bulkExpiryConfig } = await supabase.from('system_config').select('value').eq('key', 'receipt_url_expiry').single();
+      const bulkExpiry = (bulkExpiryConfig?.value as any)?.bulk_seconds || 600;
+
+      const urls = [];
+      for (const r of receipts) {
+        const { data: signedUrl } = await supabase
+          .storage
+          .from('donation-receipts')
+          .createSignedUrl(r.pdf_storage_path, bulkExpiry);
+        if (signedUrl) {
+          urls.push({
+            id: r.id,
+            receipt_number: r.receipt_number,
+            receipt_type: r.receipt_type,
+            url: signedUrl.signedUrl,
+          });
+        }
+      }
+
+      return json({ receipts: urls, tax_year: parseInt(taxYear) });
+    }
+
+    // ─── POST /stripe-portal ───
+    if (req.method === 'POST' && action === 'stripe-portal') {
+      if (!donor.stripe_customer_id) return json({ error: 'No Stripe customer linked to your account' }, 400);
+
+      const portalUrl = Deno.env.get('DONOR_PORTAL_URL') || 'https://donors.zoeist.org';
+      const session = await stripeApi('/billing_portal/sessions', 'POST',
+        `customer=${encodeURIComponent(donor.stripe_customer_id)}&return_url=${encodeURIComponent(portalUrl + '/subscriptions')}`
+      );
+
+      return json({ url: session.url });
+    }
+
+    // ─── GET /pledges ───
+    if (req.method === 'GET' && action === 'pledges') {
+      const { data: pledges, error } = await supabase
+        .from('pledges')
+        .select('id, designation, total_pledge_cents, paid_to_date_cents, frequency, status, start_date, end_date, next_payment_date, installment_amount_cents, installments_paid, installments_total, notes, created_at')
+        .eq('donor_id', donor.id)
+        .order('created_at', { ascending: false });
+
+      if (error) return json({ error: error.message }, 500);
+      return json({ pledges: pledges || [] });
+    }
+
+    // ─── GET /matching-gifts ───
+    if (req.method === 'GET' && action === 'matching-gifts') {
+      const { data: gifts, error } = await supabase
+        .from('matching_gifts')
+        .select('id, donation_id, company_name, original_gift_cents, match_amount_cents, match_ratio, status, denial_reason, submitted_at, approved_at, received_at, created_at')
+        .eq('donor_id', donor.id)
+        .order('created_at', { ascending: false });
+
+      if (error) return json({ error: error.message }, 500);
+      return json({ matching_gifts: gifts || [] });
     }
 
     return json({ error: 'Invalid endpoint' }, 400);

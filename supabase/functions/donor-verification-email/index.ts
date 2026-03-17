@@ -88,13 +88,16 @@ serve(async (req: Request) => {
         body: JSON.stringify(sgPayload),
       });
 
-      const sgStatus = sgRes.ok || sgRes.status === 202 ? 'sent' : `error_${sgRes.status}`;
+      const sgOk = sgRes.ok || sgRes.status === 202;
+      const sgStatus = sgOk ? 'sent' : `error_${sgRes.status}`;
 
-      // Log to verification table
-      await supabase.from('donor_verification_log').insert({
-        donor_id: donor.id,
-        tax_year: taxYear,
-      });
+      // Only log to verification table if send succeeded (prevents re-send suppression on failure)
+      if (sgOk) {
+        await supabase.from('donor_verification_log').insert({
+          donor_id: donor.id,
+          tax_year: taxYear,
+        });
+      }
 
       results.push({
         donor_id: donor.id,

@@ -3909,21 +3909,21 @@ function AccountingView() {
               <div className="card-title">QuickBooks IIF</div>
               <div style={{ fontSize: 32, marginBottom: 8 }}>📗</div>
               <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>IIF import file with double-entry journal entries. Includes cash donations, refunds, and in-kind contributions.</p>
-              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }}>Download .iif</button>
+              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }} onClick={(e) => { e.stopPropagation(); handleExport('quickbooks'); }}>Download .iif</button>
             </div>
 
             <div className="card" style={{ cursor: 'pointer' }} onClick={() => handleExport('xero')}>
               <div className="card-title">Xero CSV</div>
               <div style={{ fontSize: 32, marginBottom: 8 }}>📘</div>
               <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>CSV invoice import for Xero. Maps donations to account codes with tax-exempt designation.</p>
-              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }}>Download .csv</button>
+              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }} onClick={(e) => { e.stopPropagation(); handleExport('xero'); }}>Download .csv</button>
             </div>
 
             <div className="card" style={{ cursor: 'pointer' }} onClick={() => handleExport('generic')}>
               <div className="card-title">Generic CSV</div>
               <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
               <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>Comprehensive CSV with all donation details, in-kind contributions, and grant data for any accounting system.</p>
-              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }}>Download .csv</button>
+              <button className="btn btn-gold" style={{ marginTop: 12, width: '100%' }} onClick={(e) => { e.stopPropagation(); handleExport('generic'); }}>Download .csv</button>
             </div>
           </div>
         </div>

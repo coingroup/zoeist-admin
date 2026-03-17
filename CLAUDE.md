@@ -10,8 +10,19 @@
 - Repos: github.com/coingroup/zoeist-admin, github.com/coingroup/zoeist-website
 - Local admin repo: ~/Downloads/admin-dashboard/
 
-## Phases 1–9: COMPLETE AND VERIFIED
-Full pipeline works end-to-end. See brief for complete list.
+## Phase Status
+- **Phases 1–6**: Core pipeline (Stripe payments, PDF receipts, SendGrid emails, admin dashboard) — COMPLETE
+- **Phase 7**: Year-end giving statements — COMPLETE
+- **Phase 8**: Recurring donations — COMPLETE
+- **Phase 9**: Compliance automation (Form 990, Schedule B, GA C-200) — COMPLETE
+- **Phase 10**: Donor portal backend (API, magic link auth, verification emails) — COMPLETE
+- **Phase 11**: Matching gift tracking — COMPLETE
+- **Phase 12**: Events & quid pro quo receipting — COMPLETE
+- **Phase 13**: Pledges, in-kind donations, grants, UTM tracking — COMPLETE
+- **Phase 14**: Admin tools (acknowledgment letters, refunds, comms, board reports) — COMPLETE
+- **Phase 15**: Accounting export, fiscal year config, account mappings — COMPLETE
+- **Donor Portal Phase 1**: Frontend (dashboard, profile, history, receipts, subscriptions) — COMPLETE
+- **Donor Portal Phase 2**: Bulk receipts, Stripe portal, pledges view, matching gifts view — CODE COMPLETE, awaiting deploy
 
 ## HARD RULES — NEVER VIOLATE
 1. NEVER commit .env files or log secrets

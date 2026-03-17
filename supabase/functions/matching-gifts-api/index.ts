@@ -151,6 +151,34 @@ Deno.serve(async (req: Request) => {
       const id = path.replace('update/', '');
       const body = await req.json();
 
+      // Validate status transitions
+      if (body.status) {
+        const validStatuses = ['identified', 'submitted', 'approved', 'received', 'denied', 'expired'];
+        if (!validStatuses.includes(body.status)) {
+          return json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` }, 400);
+        }
+        // Fetch current status to validate transition
+        const { data: current } = await supabase.from('matching_gifts').select('status').eq('id', id).single();
+        if (!current) return json({ error: 'Matching gift not found' }, 404);
+
+        const validTransitions: Record<string, string[]> = {
+          identified: ['submitted', 'denied', 'expired'],
+          submitted: ['approved', 'denied', 'expired'],
+          approved: ['received', 'denied'],
+          received: [],  // terminal state
+          denied: ['identified'],  // allow re-opening
+          expired: ['identified'],  // allow re-opening
+        };
+        const allowed_transitions = validTransitions[current.status] || [];
+        if (!allowed_transitions.includes(body.status)) {
+          return json({ error: `Cannot transition from '${current.status}' to '${body.status}'. Allowed: ${allowed_transitions.join(', ') || 'none (terminal state)'}` }, 400);
+        }
+        // Require denial_reason when denying
+        if (body.status === 'denied' && !body.denial_reason) {
+          return json({ error: 'denial_reason required when setting status to denied' }, 400);
+        }
+      }
+
       const allowed = ['status', 'match_amount_cents', 'match_ratio', 'notes', 'denial_reason', 'match_receipt_number', 'company_name'];
       const updates: Record<string, unknown> = {};
       for (const key of allowed) {

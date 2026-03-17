@@ -148,7 +148,9 @@ Deno.serve(async (req: Request) => {
       if (admin.role !== 'super_admin' && admin.role !== 'admin') return json({ error: 'Insufficient permissions' }, 403);
       const id = path.replace('event/', '');
 
+      // Clean up related records before deleting event
       await supabase.from('donations').update({ event_id: null }).eq('event_id', id);
+      await supabase.from('event_attendees').delete().eq('event_id', id);
       const { error } = await supabase.from('events').delete().eq('id', id);
       if (error) return json({ error: error.message }, 500);
 
@@ -257,6 +259,86 @@ Deno.serve(async (req: Request) => {
       });
 
       return json({ success: true, qpq_applied: qpqRequired, tax_deductible_cents: taxDeductible });
+    }
+
+    // -- CHECK-IN REPORT / ANALYTICS --
+    if (path.match(/^event\/[^/]+\/checkin-report$/) && method === 'GET') {
+      const id = path.replace('event/', '').replace('/checkin-report', '');
+      const { data: event } = await supabase.from('events').select('id, name, capacity, tickets_sold, event_date').eq('id', id).single();
+      if (!event) return json({ error: 'Event not found' }, 404);
+
+      const { data: attendees } = await supabase.from('event_attendees')
+        .select('id, name, email, ticket_type, ticket_price_cents, checked_in, checked_in_at, donor:donors(first_name, last_name, email)')
+        .eq('event_id', id)
+        .order('checked_in_at', { ascending: true });
+
+      const all = attendees || [];
+      const checkedIn = all.filter(a => a.checked_in);
+      const notCheckedIn = all.filter(a => !a.checked_in);
+      const totalTicketRevenue = all.reduce((s, a) => s + (a.ticket_price_cents || 0), 0);
+
+      // Check-in timeline: group by 15-minute intervals
+      const timeline: Record<string, number> = {};
+      for (const a of checkedIn) {
+        if (a.checked_in_at) {
+          const t = new Date(a.checked_in_at);
+          const mins = Math.floor(t.getMinutes() / 15) * 15;
+          const key = `${String(t.getHours()).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+          timeline[key] = (timeline[key] || 0) + 1;
+        }
+      }
+
+      // By ticket type
+      const byType: Record<string, { total: number; checked_in: number }> = {};
+      for (const a of all) {
+        const t = a.ticket_type || 'general';
+        if (!byType[t]) byType[t] = { total: 0, checked_in: 0 };
+        byType[t].total++;
+        if (a.checked_in) byType[t].checked_in++;
+      }
+
+      return json({
+        event: { id: event.id, name: event.name, date: event.event_date, capacity: event.capacity },
+        summary: {
+          total_registered: all.length,
+          checked_in: checkedIn.length,
+          not_checked_in: notCheckedIn.length,
+          check_in_rate: all.length > 0 ? Math.round((checkedIn.length / all.length) * 100) : 0,
+          capacity_utilization: event.capacity ? Math.round((all.length / event.capacity) * 100) : null,
+          total_ticket_revenue_cents: totalTicketRevenue,
+        },
+        by_ticket_type: Object.entries(byType).map(([type, v]) => ({ type, ...v })),
+        checkin_timeline: Object.entries(timeline).map(([time, count]) => ({ time, count })).sort((a, b) => a.time.localeCompare(b.time)),
+        not_checked_in: notCheckedIn.map(a => ({
+          id: a.id,
+          name: a.name || (a.donor ? `${(a.donor as any).first_name} ${(a.donor as any).last_name}` : 'Unknown'),
+          email: a.email || (a.donor as any)?.email,
+          ticket_type: a.ticket_type,
+        })),
+      });
+    }
+
+    // -- BATCH CHECK-IN --
+    if (path === 'batch-checkin' && method === 'POST') {
+      if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
+      const { attendee_ids } = await req.json();
+      if (!attendee_ids || !Array.isArray(attendee_ids)) return json({ error: 'attendee_ids array required' }, 400);
+
+      const now = new Date().toISOString();
+      const { error } = await supabase.from('event_attendees')
+        .update({ checked_in: true, checked_in_at: now })
+        .in('id', attendee_ids)
+        .is('checked_in', false);
+
+      if (error) return json({ error: error.message }, 500);
+
+      await supabase.from('admin_audit_log').insert({
+        admin_user_id: admin.id, action: 'batch_checkin',
+        resource_type: 'event_attendee',
+        details: { count: attendee_ids.length },
+      });
+
+      return json({ success: true, checked_in: attendee_ids.length });
     }
 
     // -- UNLINK DONATION FROM EVENT --

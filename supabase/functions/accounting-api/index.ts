@@ -287,6 +287,23 @@ Deno.serve(async (req: Request) => {
       if (admin.role !== 'super_admin' && admin.role !== 'admin') return json({ error: 'Insufficient permissions' }, 403);
       const { mappings } = await req.json();
 
+      // Validate account_mappings schema
+      if (typeof mappings !== 'object' || mappings === null || Array.isArray(mappings)) {
+        return json({ error: 'mappings must be an object' }, 400);
+      }
+      // Validate required keys
+      const requiredKeys = ['_default_income', '_default_bank'];
+      const missingKeys = requiredKeys.filter(k => !(k in mappings));
+      if (missingKeys.length > 0) {
+        return json({ error: `Missing required mapping keys: ${missingKeys.join(', ')}. Required: ${requiredKeys.join(', ')}` }, 400);
+      }
+      // Validate all values are strings
+      for (const [key, val] of Object.entries(mappings)) {
+        if (typeof val !== 'string') {
+          return json({ error: `Mapping value for '${key}' must be a string, got ${typeof val}` }, 400);
+        }
+      }
+
       const { data: existing } = await supabase.from('system_config').select('key').eq('key', 'account_mappings').single();
       if (existing) {
         await supabase.from('system_config').update({ value: mappings, updated_at: new Date().toISOString(), updated_by: admin.email as string }).eq('key', 'account_mappings');
