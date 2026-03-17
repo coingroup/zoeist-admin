@@ -10,9 +10,6 @@ node_modules/
 # Build
 dist/
 
-# Lock files
-package-lock.json
-
 # Supabase
 supabase/.temp/
 
