@@ -178,11 +178,21 @@ Deno.serve(async (req: Request) => {
     if (path === 'communication' && method === 'POST') {
       if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
       const body = await req.json();
+      const validChannels = ['email', 'mail', 'phone', 'sms'];
+      const validCategories = ['receipts', 'statements', 'marketing', 'compliance', 'events', 'newsletters', 'fundraising'];
+      if (!body.channel || !validChannels.includes(body.channel)) {
+        return json({ error: `Invalid channel. Must be one of: ${validChannels.join(', ')}` }, 400);
+      }
+      if (!body.category || !validCategories.includes(body.category)) {
+        return json({ error: `Invalid category. Must be one of: ${validCategories.join(', ')}` }, 400);
+      }
       const { data, error } = await supabase.from('donor_communications').insert({
         donor_id: body.donor_id,
         channel: body.channel,
         category: body.category,
         opted_in: body.opted_in !== false,
+        opted_in_at: body.opted_in !== false ? new Date().toISOString() : null,
+        opted_out_at: body.opted_in === false ? new Date().toISOString() : null,
       }).select().single();
       if (error) return json({ error: error.message }, 500);
       return json({ success: true, preference: data });
@@ -201,6 +211,131 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await supabase.from('donor_communications').update(updates).eq('id', id).select().single();
       if (error) return json({ error: error.message }, 500);
       return json({ success: true, preference: data });
+    }
+
+    // ============ COMMUNICATION PREFERENCE CHECK ============
+
+    // Check if a donor has opted out of a specific channel/category
+    if (path === 'check-preferences' && method === 'POST') {
+      const { donor_id, channel, category } = await req.json();
+      if (!donor_id) return json({ error: 'donor_id required' }, 400);
+
+      let query = supabase.from('donor_communications').select('channel, category, opted_in')
+        .eq('donor_id', donor_id).eq('opted_in', false);
+      if (channel) query = query.eq('channel', channel);
+      if (category) query = query.eq('category', category);
+
+      const { data: optOuts } = await query;
+      const isOptedOut = (optOuts || []).length > 0;
+
+      return json({
+        donor_id,
+        opted_out: isOptedOut,
+        opt_outs: optOuts || [],
+        can_send: !isOptedOut,
+      });
+    }
+
+    // Bulk check preferences for multiple donors
+    if (path === 'check-preferences-bulk' && method === 'POST') {
+      const { donor_ids, channel, category } = await req.json();
+      if (!donor_ids || !Array.isArray(donor_ids)) return json({ error: 'donor_ids array required' }, 400);
+
+      let query = supabase.from('donor_communications').select('donor_id, channel, category, opted_in')
+        .in('donor_id', donor_ids).eq('opted_in', false);
+      if (channel) query = query.eq('channel', channel);
+      if (category) query = query.eq('category', category);
+
+      const { data: optOuts } = await query;
+      const optedOutIds = new Set((optOuts || []).map(o => o.donor_id));
+
+      return json({
+        total: donor_ids.length,
+        can_send: donor_ids.filter(id => !optedOutIds.has(id)),
+        opted_out: donor_ids.filter(id => optedOutIds.has(id)),
+      });
+    }
+
+    // ============ ACKNOWLEDGMENT LETTER CONTENT GENERATION ============
+
+    if (path.match(/^letter\/[^/]+\/generate$/) && method === 'POST') {
+      if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
+      const letterId = path.replace('letter/', '').replace('/generate', '');
+
+      const { data: letter } = await supabase.from('acknowledgment_letters')
+        .select('*, donor:donors(first_name, last_name, email, address_line1, address_line2, city, state, zip, total_donated_cents), donation:donations(receipt_number, amount_cents, donated_at, designation, goods_services_provided, goods_services_description, goods_services_value_cents)')
+        .eq('id', letterId).single();
+      if (!letter) return json({ error: 'Letter not found' }, 404);
+
+      const donor = letter.donor as any;
+      const donation = letter.donation as any;
+      const tier = letter.template_tier || 'standard';
+      const donorName = `${donor?.first_name || ''} ${donor?.last_name || ''}`.trim() || 'Valued Donor';
+
+      const tierMessages: Record<string, string> = {
+        platinum: 'Your extraordinary generosity at the Platinum level has made you one of our most impactful supporters. Your transformational giving is shaping the future of our mission.',
+        gold: 'Your remarkable Gold-level commitment demonstrates exceptional dedication to our cause. Your sustained generosity creates lasting impact in our community.',
+        silver: 'Your Silver-level support is truly making a difference. Your consistent giving helps sustain and grow our programs throughout the year.',
+        bronze: 'Your Bronze-level contribution is deeply valued. Every gift, regardless of size, helps advance our mission and serves those who need it most.',
+        standard: 'Your generous contribution is sincerely appreciated. Your support helps make our work possible.',
+      };
+
+      const amountStr = donation ? `$${(donation.amount_cents / 100).toFixed(2)}` : '';
+      const dateStr = donation ? new Date(donation.donated_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '';
+      const designation = donation?.designation || 'unrestricted';
+
+      let qpqDisclosure = '';
+      if (donation?.goods_services_provided && donation?.goods_services_value_cents > 0) {
+        qpqDisclosure = `\n\nIn connection with this contribution, goods or services with an estimated fair market value of $${(donation.goods_services_value_cents / 100).toFixed(2)} were provided to you (${donation.goods_services_description || 'goods/services'}). The tax-deductible portion of your contribution is $${((donation.amount_cents - donation.goods_services_value_cents) / 100).toFixed(2)}.`;
+      }
+
+      const letterContent = `Dear ${donorName},
+
+On behalf of Zoeist, Inc., thank you for your generous ${amountStr ? `gift of ${amountStr}` : 'contribution'}${dateStr ? ` on ${dateStr}` : ''}${designation !== 'unrestricted' ? ` designated for ${designation}` : ''}.
+
+${tierMessages[tier] || tierMessages.standard}${qpqDisclosure}
+
+${!donation?.goods_services_provided ? 'No goods or services were provided in exchange for this contribution. ' : ''}This letter serves as your official acknowledgment for tax purposes. Zoeist, Inc. is a 501(c)(3) tax-exempt organization. Our EIN is 92-0954601.${donation?.receipt_number ? ` Receipt #${donation.receipt_number}.` : ''}
+
+Please retain this letter for your tax records. We are grateful for your partnership in our mission.
+
+With sincere appreciation,
+
+${letter.signed_by || 'The Zoeist Team'}
+Zoeist, Inc.
+Georgia, United States
+EIN: 92-0954601`;
+
+      const letterHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body{font-family:Georgia,serif;color:#1a1a1a;max-width:700px;margin:40px auto;padding:0 20px;line-height:1.6}
+.header{border-bottom:2px solid #c8a855;padding-bottom:16px;margin-bottom:24px}
+.header h1{font-size:18px;color:#c8a855;margin:0}
+.header p{font-size:12px;color:#666;margin:4px 0 0}
+.footer{border-top:1px solid #ddd;padding-top:16px;margin-top:32px;font-size:11px;color:#888}
+</style></head><body>
+<div class="header"><h1>Zoeist, Inc.</h1><p>501(c)(3) Tax-Exempt Organization | EIN: 92-0954601</p></div>
+${letterContent.split('\n\n').map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('\n')}
+<div class="footer">
+<p>This acknowledgment is provided in accordance with IRS requirements for charitable contributions.</p>
+<p>Zoeist, Inc. | Georgia, United States | EIN: 92-0954601</p>
+</div></body></html>`;
+
+      return json({
+        success: true,
+        letter_id: letterId,
+        tier,
+        content_text: letterContent,
+        content_html: letterHtml,
+        donor_name: donorName,
+        donor_address: donor?.address_line1 ? {
+          line1: donor.address_line1,
+          line2: donor.address_line2,
+          city: donor.city,
+          state: donor.state,
+          zip: donor.zip,
+        } : null,
+      });
     }
 
     // ============ REFUND / VOID ============

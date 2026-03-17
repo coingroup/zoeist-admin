@@ -157,7 +157,14 @@ Deno.serve(async (req: Request) => {
       if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
       const body = await req.json();
       const value = body.estimated_value_cents || 0;
-      const { data, error } = await supabase.from('in_kind_donations').insert({
+      const validMethods = ['fair_market_value', 'appraisal', 'comparable_sales', 'replacement_cost', 'donor_estimate', 'other'];
+      if (body.valuation_method && !validMethods.includes(body.valuation_method)) {
+        return json({ error: `Invalid valuation_method. Must be one of: ${validMethods.join(', ')}` }, 400);
+      }
+      const isVehicle = body.category === 'vehicle';
+      const form1098cRequired = isVehicle && value >= 50000;
+
+      const insert: Record<string, unknown> = {
         donor_id: body.donor_id,
         description: body.description,
         category: body.category || 'other',
@@ -165,10 +172,20 @@ Deno.serve(async (req: Request) => {
         valuation_method: body.valuation_method || null,
         appraiser_name: body.appraiser_name || null,
         form_8283_required: value >= 50000,
+        form_1098c_required: form1098cRequired,
         donated_at: body.donated_at || new Date().toISOString(),
         tax_year: body.tax_year || new Date().getFullYear(),
         notes: body.notes || null,
-      }).select().single();
+      };
+      // Vehicle-specific fields for Form 1098-C
+      if (isVehicle) {
+        if (body.vehicle_vin) insert.vehicle_vin = body.vehicle_vin;
+        if (body.vehicle_year) insert.vehicle_year = body.vehicle_year;
+        if (body.vehicle_make) insert.vehicle_make = body.vehicle_make;
+        if (body.vehicle_model) insert.vehicle_model = body.vehicle_model;
+      }
+
+      const { data, error } = await supabase.from('in_kind_donations').insert(insert).select().single();
       if (error) return json({ error: error.message }, 500);
       await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'create_in_kind', resource_type: 'in_kind_donation', resource_id: data.id });
       return json({ success: true, donation: data });
@@ -178,11 +195,21 @@ Deno.serve(async (req: Request) => {
       if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
       const id = path.replace('in-kind/', '');
       const body = await req.json();
-      const allowed = ['description', 'category', 'estimated_value_cents', 'valuation_method', 'appraiser_name', 'form_8283_required', 'form_8283_signed', 'form_1098c_required', 'receipt_number', 'donated_at', 'tax_year', 'notes'];
+      const validMethods = ['fair_market_value', 'appraisal', 'comparable_sales', 'replacement_cost', 'donor_estimate', 'other'];
+      if (body.valuation_method && !validMethods.includes(body.valuation_method)) {
+        return json({ error: `Invalid valuation_method. Must be one of: ${validMethods.join(', ')}` }, 400);
+      }
+      const allowed = ['description', 'category', 'estimated_value_cents', 'valuation_method', 'appraiser_name', 'form_8283_required', 'form_8283_signed', 'form_1098c_required', 'receipt_number', 'donated_at', 'tax_year', 'notes', 'vehicle_vin', 'vehicle_year', 'vehicle_make', 'vehicle_model'];
       const updates: Record<string, unknown> = {};
       for (const key of allowed) { if (key in body) updates[key] = body[key]; }
       if ('estimated_value_cents' in updates) {
         updates.form_8283_required = (updates.estimated_value_cents as number) >= 50000;
+      }
+      // Auto-calculate form_1098c_required for vehicles
+      const category = (updates.category || body.category) as string;
+      const value = (updates.estimated_value_cents ?? body.estimated_value_cents) as number;
+      if (category === 'vehicle' && value !== undefined) {
+        updates.form_1098c_required = value >= 50000;
       }
       const { data, error } = await supabase.from('in_kind_donations').update(updates).eq('id', id).select().single();
       if (error) return json({ error: error.message }, 500);
@@ -197,6 +224,145 @@ Deno.serve(async (req: Request) => {
       if (error) return json({ error: error.message }, 500);
       await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'delete_in_kind', resource_type: 'in_kind_donation', resource_id: id });
       return json({ success: true });
+    }
+
+    // ============ GRANT REPORTS ============
+
+    if (path.match(/^grant\/[^/]+\/reports$/) && method === 'GET') {
+      const grantId = path.replace('grant/', '').replace('/reports', '');
+      const { data, error } = await supabase.from('grant_reports')
+        .select('*')
+        .eq('grant_id', grantId)
+        .order('due_date', { ascending: true });
+      if (error) return json({ error: error.message }, 500);
+      return json({ reports: data || [] });
+    }
+
+    if (path.match(/^grant\/[^/]+\/report$/) && method === 'POST') {
+      if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
+      const grantId = path.replace('grant/', '').replace('/report', '');
+      const body = await req.json();
+      if (!body.report_name || !body.due_date) return json({ error: 'report_name and due_date required' }, 400);
+
+      const { data, error } = await supabase.from('grant_reports').insert({
+        grant_id: grantId,
+        report_name: body.report_name,
+        due_date: body.due_date,
+        notes: body.notes || null,
+      }).select().single();
+      if (error) return json({ error: error.message }, 500);
+      await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'create_grant_report', resource_type: 'grant_report', resource_id: data.id });
+      return json({ success: true, report: data });
+    }
+
+    if (path.match(/^grant-report\/[^/]+$/) && method === 'PUT') {
+      if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
+      const reportId = path.replace('grant-report/', '');
+      const body = await req.json();
+      const allowed = ['report_name', 'due_date', 'status', 'submitted_by', 'notes'];
+      const updates: Record<string, unknown> = {};
+      for (const key of allowed) { if (key in body) updates[key] = body[key]; }
+      if (body.status === 'submitted' && !updates.submitted_at) updates.submitted_at = new Date().toISOString();
+      updates.updated_at = new Date().toISOString();
+
+      const { data, error } = await supabase.from('grant_reports').update(updates).eq('id', reportId).select().single();
+      if (error) return json({ error: error.message }, 500);
+
+      // Auto-advance next_report_due on the parent grant if this was the next report
+      if (body.status === 'submitted' || body.status === 'approved') {
+        const { data: report } = await supabase.from('grant_reports').select('grant_id').eq('id', reportId).single();
+        if (report) {
+          const { data: nextReport } = await supabase.from('grant_reports')
+            .select('due_date')
+            .eq('grant_id', report.grant_id)
+            .eq('status', 'pending')
+            .order('due_date', { ascending: true })
+            .limit(1)
+            .single();
+          await supabase.from('grants').update({
+            next_report_due: nextReport?.due_date || null,
+            updated_at: new Date().toISOString(),
+          }).eq('id', report.grant_id);
+        }
+      }
+
+      await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'update_grant_report', resource_type: 'grant_report', resource_id: reportId, details: updates });
+      return json({ success: true, report: data });
+    }
+
+    if (path.match(/^grant-report\/[^/]+$/) && method === 'DELETE') {
+      if (admin.role !== 'super_admin' && admin.role !== 'admin') return json({ error: 'Insufficient permissions' }, 403);
+      const reportId = path.replace('grant-report/', '');
+      const { error } = await supabase.from('grant_reports').delete().eq('id', reportId);
+      if (error) return json({ error: error.message }, 500);
+      await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'delete_grant_report', resource_type: 'grant_report', resource_id: reportId });
+      return json({ success: true });
+    }
+
+    // -- Auto-generate grant report schedule --
+    if (path.match(/^grant\/[^/]+\/generate-reports$/) && method === 'POST') {
+      if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
+      const grantId = path.replace('grant/', '').replace('/generate-reports', '');
+      const { data: grant } = await supabase.from('grants')
+        .select('reporting_frequency, grant_period_start, grant_period_end, funder_name')
+        .eq('id', grantId).single();
+      if (!grant) return json({ error: 'Grant not found' }, 404);
+      if (!grant.reporting_frequency || !grant.grant_period_start || !grant.grant_period_end) {
+        return json({ error: 'Grant must have reporting_frequency, grant_period_start, and grant_period_end set' }, 400);
+      }
+
+      // Idempotency: check if reports already exist for this grant
+      const { count: existingCount } = await supabase.from('grant_reports')
+        .select('id', { count: 'exact', head: true })
+        .eq('grant_id', grantId);
+      if ((existingCount || 0) > 0) {
+        return json({ error: 'Grant report schedule already exists. Delete existing reports first to regenerate.' }, 409);
+      }
+
+      // Generate report due dates based on frequency
+      const reports: { grant_id: string; report_name: string; due_date: string }[] = [];
+      const start = new Date(grant.grant_period_start);
+      const end = new Date(grant.grant_period_end);
+      let current = new Date(start);
+      let num = 1;
+
+      const freq = grant.reporting_frequency;
+      while (current <= end) {
+        if (freq === 'monthly') current.setMonth(current.getMonth() + 1);
+        else if (freq === 'quarterly') current.setMonth(current.getMonth() + 3);
+        else if (freq === 'semi-annual') current.setMonth(current.getMonth() + 6);
+        else if (freq === 'annual') current.setFullYear(current.getFullYear() + 1);
+        else break;
+
+        if (current <= end) {
+          reports.push({
+            grant_id: grantId,
+            report_name: `${grant.funder_name} Report #${num}`,
+            due_date: current.toISOString().split('T')[0],
+          });
+          num++;
+        }
+      }
+      // Always add final report at grant end
+      reports.push({
+        grant_id: grantId,
+        report_name: `${grant.funder_name} Final Report`,
+        due_date: grant.grant_period_end,
+      });
+
+      if (reports.length > 0) {
+        const { error } = await supabase.from('grant_reports').insert(reports);
+        if (error) return json({ error: error.message }, 500);
+
+        // Set next_report_due on the grant
+        await supabase.from('grants').update({
+          next_report_due: reports[0].due_date,
+          updated_at: new Date().toISOString(),
+        }).eq('id', grantId);
+      }
+
+      await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'generate_grant_reports', resource_type: 'grant', resource_id: grantId, details: { count: reports.length } });
+      return json({ success: true, reports_created: reports.length, reports });
     }
 
     // ============ GRANTS ============
@@ -262,6 +428,43 @@ Deno.serve(async (req: Request) => {
     }
 
     // ============ UTM TRACKING ============
+
+    // -- SET/UPDATE UTM fields on a donation --
+    if (path.match(/^utm\/[^/]+$/) && method === 'PUT') {
+      if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
+      const donationId = path.replace('utm/', '');
+      const body = await req.json();
+      const allowed = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'referrer_url'];
+      const updates: Record<string, unknown> = {};
+      for (const key of allowed) { if (key in body) updates[key] = body[key]; }
+      if (Object.keys(updates).length === 0) return json({ error: 'No valid UTM fields provided' }, 400);
+      updates.updated_at = new Date().toISOString();
+
+      const { data, error } = await supabase.from('donations').update(updates).eq('id', donationId).select('id, utm_source, utm_medium, utm_campaign, utm_content, referrer_url').single();
+      if (error) return json({ error: error.message }, 500);
+      await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'update_utm', resource_type: 'donation', resource_id: donationId, details: updates });
+      return json({ success: true, donation: data });
+    }
+
+    // -- BATCH SET UTM fields --
+    if (path === 'utm-batch' && method === 'POST') {
+      if (admin.role === 'viewer') return json({ error: 'Insufficient permissions' }, 403);
+      const { donation_ids, utm_source, utm_medium, utm_campaign, utm_content, referrer_url } = await req.json();
+      if (!donation_ids || !Array.isArray(donation_ids) || donation_ids.length === 0) return json({ error: 'donation_ids array required' }, 400);
+
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (utm_source !== undefined) updates.utm_source = utm_source;
+      if (utm_medium !== undefined) updates.utm_medium = utm_medium;
+      if (utm_campaign !== undefined) updates.utm_campaign = utm_campaign;
+      if (utm_content !== undefined) updates.utm_content = utm_content;
+      if (referrer_url !== undefined) updates.referrer_url = referrer_url;
+
+      const { error } = await supabase.from('donations').update(updates).in('id', donation_ids);
+      if (error) return json({ error: error.message }, 500);
+      await supabase.from('admin_audit_log').insert({ admin_user_id: admin.id, action: 'batch_update_utm', resource_type: 'donation', details: { count: donation_ids.length, ...updates } });
+      return json({ success: true, updated: donation_ids.length });
+    }
+
     if (path === 'utm-report' && method === 'GET') {
       const { data: donations } = await supabase.from('donations')
         .select('utm_source, utm_medium, utm_campaign, utm_content, referrer_url, amount_cents')

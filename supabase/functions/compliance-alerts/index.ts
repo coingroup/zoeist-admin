@@ -67,6 +67,38 @@ serve(async (req: Request) => {
         // Determine recipient
         const sendTo = deadline.assigned_to || 'focus@zoeist.org';
 
+        // Check communication preferences — respect opt-outs for compliance category
+        if (sendTo !== 'focus@zoeist.org') {
+          const { data: donor } = await supabase.from('donors').select('id').eq('email', sendTo).single();
+          if (donor) {
+            const { data: optOut } = await supabase.from('donor_communications')
+              .select('id')
+              .eq('donor_id', donor.id)
+              .eq('channel', 'email')
+              .eq('category', 'compliance')
+              .eq('opted_in', false)
+              .maybeSingle();
+            if (optOut) {
+              // Log skipped alert
+              await supabase.from('compliance_alert_log').insert({
+                deadline_id: deadline.id,
+                alert_days: threshold,
+                sent_to: sendTo,
+                sendgrid_status: 'skipped_opt_out',
+              });
+              alertsSent.push({
+                deadline_id: deadline.id,
+                filing_name: deadline.filing_name,
+                days_remaining: daysRemaining,
+                threshold,
+                sent_to: sendTo,
+                status: 'skipped_opt_out',
+              });
+              break;
+            }
+          }
+        }
+
         // Send email via SendGrid
         const emailHtml = buildAlertEmail(deadline, daysRemaining, threshold);
         const sgPayload = {
