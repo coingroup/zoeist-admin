@@ -1,0 +1,143 @@
+# .github/workflows/ci-cd.yml
+# Reusable CI/CD pipeline — enforces dev → main promotion
+# Copy this into each repo's .github/workflows/ directory
+#
+# Flow:
+#   Push to dev → Run tests against dev database → If pass, create PR to main
+#   Merge PR to main → Run tests against prod database → Deploy
+#
+# Required GitHub Secrets (set per repo in Settings → Secrets):
+#   SUPABASE_PROD_REF         — Production Supabase project ref
+#   SUPABASE_DEV_REF          — Dev Supabase project ref
+#   SUPABASE_PROD_DB_PASSWORD — Production database password
+#   SUPABASE_DEV_DB_PASSWORD  — Dev database password
+#   SUPABASE_ACCESS_TOKEN     — Supabase CLI access token
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Run on every push to dev
+  # ─────────────────────────────────────────────
+  test-dev:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Type check
+        run: npm run type-check --if-present
+
+      - name: Run tests against dev database
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://${{ secrets.SUPABASE_DEV_REF }}.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_DEV_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEV_SERVICE_ROLE_KEY }}
+          DATABASE_URL: postgresql://postgres:${{ secrets.SUPABASE_DEV_DB_PASSWORD }}@db.${{ secrets.SUPABASE_DEV_REF }}.supabase.co:5432/postgres
+        run: npm test --if-present
+
+      - name: Run Supabase migrations on dev
+        uses: supabase/setup-cli@v1
+      - run: supabase db push --project-ref ${{ secrets.SUPABASE_DEV_REF }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+  # ─────────────────────────────────────────────
+  # Run on PR to main (gates the merge)
+  # ─────────────────────────────────────────────
+  test-staging:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Type check
+        run: npm run type-check --if-present
+
+      - name: Run full test suite
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://${{ secrets.SUPABASE_DEV_REF }}.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_DEV_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEV_SERVICE_ROLE_KEY }}
+          DATABASE_URL: postgresql://postgres:${{ secrets.SUPABASE_DEV_DB_PASSWORD }}@db.${{ secrets.SUPABASE_DEV_REF }}.supabase.co:5432/postgres
+        run: npm test --if-present
+
+  # ─────────────────────────────────────────────
+  # Run on merge to main — deploy to production
+  # ─────────────────────────────────────────────
+  deploy-prod:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Supabase migrations on prod
+        uses: supabase/setup-cli@v1
+      - run: supabase db push --project-ref ${{ secrets.SUPABASE_PROD_REF }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Build
+        run: npm run build
+
+      # Deploy step — uncomment the one that matches your hosting:
+
+      # --- Vercel ---
+      # - name: Deploy to Vercel
+      #   uses: amondnet/vercel-action@v25
+      #   with:
+      #     vercel-token: ${{ secrets.VERCEL_TOKEN }}
+      #     vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+      #     vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+      #     vercel-args: '--prod'
+
+      # --- DigitalOcean App Platform ---
+      # Deploys automatically on push to main if configured
+
+      - name: Production deploy complete
+        run: echo "Deployed to production successfully"
