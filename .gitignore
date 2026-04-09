@@ -22,3 +22,6 @@ supabase/.temp/
 
 # Claude Code
 .claude/settings.local.json
+
+# Ensure claude-context is tracked
+!claude-context/
