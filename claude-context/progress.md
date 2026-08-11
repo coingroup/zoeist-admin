@@ -26,6 +26,8 @@ _(Items actively being worked on)_
 
 _(Move completed items here with completion date)_
 
+- [x] **AI metadata & scaffold cleanup** — Added meta description. Added Zoeist branded favicon (favicon.ico, favicon.svg, favicon-transparent.svg, apple-touch-icon.png copied from zoeist-website). Pushed to main. Completed: 2026-08-10.
+
 ---
 
 ## Notes
