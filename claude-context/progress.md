@@ -24,8 +24,7 @@ _(Items actively being worked on)_
 
 ## Done
 
-_(Move completed items here with completion date)_
-
+- [x] **Coolify migration & Docker setup** — Created Dockerfile and nginx.conf for Coolify deployment (multi-stage node:20 → nginx:alpine, port 80). Added Docker HEALTHCHECK (wget -qO- http://127.0.0.1/ pattern for Coolify compatibility). Successfully deployed to Coolify, healthcheck passing. Updated CLAUDE.md and README.md to replace DigitalOcean references with Coolify. No AI metadata found, branding verified as "Zoeist Admin". DigitalOcean App Platform can be decommissioned. Completed: 2026-08-12.
 - [x] **AI metadata & scaffold cleanup** — Added meta description. Added Zoeist branded favicon (favicon.ico, favicon.svg, favicon-transparent.svg, apple-touch-icon.png copied from zoeist-website). Pushed to main. Completed: 2026-08-10.
 
 ---
