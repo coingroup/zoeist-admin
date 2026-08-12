@@ -2,10 +2,10 @@
 
 Admin dashboard for managing donations, donors, and compliance for Zoeist, Inc.
 
-## Deploy to DigitalOcean App Platform
+## Deploy to Coolify (Hetzner)
 
 1. Push this repo to GitHub
-2. Connect to DigitalOcean App Platform → Create App
+2. Connect to Coolify → Create new resource
 3. Select the GitHub repo
 4. Configure as **Static Site**:
    - Build Command: `npm run build`

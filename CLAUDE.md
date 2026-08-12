@@ -6,7 +6,7 @@
 ## Tech Stack
 - React + Vite (frontends), Deno (Edge Functions), Supabase PostgreSQL
 - Stripe (test mode, API 2023-10-16), SendGrid (from: focus@zoeist.org)
-- 11+ Supabase Edge Functions, DigitalOcean App Platform (auto-deploy on push to main)
+- 11+ Supabase Edge Functions, Coolify on Hetzner (auto-deploy on push to main)
 - Repos: github.com/coingroup/zoeist-admin, github.com/coingroup/zoeist-website
 - Local admin repo: ~/Downloads/admin-dashboard/
 
