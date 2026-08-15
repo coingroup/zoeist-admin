@@ -8,7 +8,7 @@
 - Stripe (test mode, API 2023-10-16), SendGrid (from: focus@zoeist.org)
 - 11+ Supabase Edge Functions, DigitalOcean App Platform (auto-deploy on push to main)
 - Repos: github.com/coingroup/zoeist-admin, github.com/coingroup/zoeist-website
-- Local admin repo: ~/Downloads/admin-dashboard/
+- Local admin repo: ~/Projects/zoeist-admin/
 
 ## Phase Status
 - **Phases 1–6**: Core pipeline (Stripe payments, PDF receipts, SendGrid emails, admin dashboard) — COMPLETE
