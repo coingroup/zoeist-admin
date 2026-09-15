@@ -1,27 +1,22 @@
-# Environment
-.env.txt
-.env
-.env.local
-.env.*.local
 
-# Dependencies
-node_modules/
-
-# Build
-dist/
-
-# Lock files
-package-lock.json
-
-# Supabase
-supabase/.temp/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-
-# Claude Code
 .claude/settings.local.json
+.DS_Store
+.env
+.env.*.local
+.env.local
+.env.txt
+.idea/
+.vscode/
+*.swo
+*.swp
+# Build
+# Claude Code
+# Dependencies
+# Environment
+# IDE
+# Lock files
+# Supabase
+dist/
+node_modules/
+package-lock.json
+supabase/.temp/
