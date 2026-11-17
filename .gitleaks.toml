@@ -1,0 +1,13 @@
+# gitleaks config (guard-repo, owner request 11-17-2026): gitleaks' default rules plus an allowlist.
+# To allow a known non-secret, add a regex to `regexes` below (it is matched against the flagged value),
+# with a comment saying what it is and the date. Prefer a narrow regex; for a whole file use `paths`.
+# Never add a real secret here: rotate it instead.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secrets"
+regexes = [
+  # Asana GIDs: a bare 16-digit number (Asana URLs and gid fields). No credential is all digits.
+  '''^[0-9]{16}$''',
+]

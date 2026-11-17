@@ -3,5 +3,65 @@
     "commit": "",
     "pr": "",
     "sessionUrl": false
+  },
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.production)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.p8)",
+      "Read(**/*.p12)",
+      "Read(**/.mcp.json)",
+      "Read(**/*.secret)",
+      "Read(**/*.secrets)",
+      "Read(**/secrets.json)",
+      "Read(**/client_secret*.json)",
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.doppler/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.netrc)",
+      "Read(~/.npmrc)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "filesystem": {
+      "denyRead": [
+        "~/**/.env",
+        "~/**/.env.local",
+        "~/**/.env.*.local",
+        "~/**/.env.development",
+        "~/**/.env.production",
+        "~/**/.env.staging",
+        "~/**/.env.test",
+        "~/**/*.pem",
+        "~/**/*.key",
+        "~/**/*.p8",
+        "~/**/*.p12",
+        "~/**/.mcp.json",
+        "~/**/*.secret",
+        "~/**/*.secrets",
+        "~/**/secrets.json",
+        "~/**/client_secret*.json",
+        "~/.aws",
+        "~/.ssh",
+        "~/.doppler",
+        "~/.config/gh",
+        "~/.netrc",
+        "~/.npmrc"
+      ],
+      "allowRead": [
+        "~/**/.env.example",
+        "~/**/.env.sample",
+        "~/**/.env.template"
+      ]
+    }
   }
 }
