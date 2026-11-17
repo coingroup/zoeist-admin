@@ -1,0 +1,25 @@
+# Secret scan on every pull request and on pushes to dev and staging (guard-repo, owner request 11-17-2026).
+# A finding fails the check, so the PR cannot merge. Known non-secrets go in .gitleaks.toml.
+# An organization repo needs the free GITLEAKS_LICENSE secret (gitleaks.io), saved once at the org level.
+name: gitleaks
+on:
+  pull_request:
+  push:
+    branches: [dev, staging]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
