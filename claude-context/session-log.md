@@ -90,3 +90,16 @@
   - Undo: recreate the two policies (header of the migration file); restore the ledger from the backup table.
 - **Not done / whose:** item 3987 (year-end receipts bucket, owner's decision); the owner's check that zoeist.org still loads website assets.
 - **11-17-2026, owner answer to item 3987: B.** Create a private 'receipts' bucket on production with the same settings and policies as donation-receipts; no code change. Received 11-20-2026 in this session.
+
+## 11-20-2026 — Year-end receipts bucket (owner item 3987, answer B)
+
+- **Done:** migration 20261120000000_receipts_bucket.sql (private 'receipts' bucket, 10 MB, PDF only, "Admins can read receipts", identical to donation-receipts). PR 5 was merged into dev by gitpr. CI run https://github.com/coingroup/zoeist-admin/actions/runs/44787632305 is green.
+- **Verified on zoeist-dev (rollback-only probes):** the bucket settings match donation-receipts; a service_role write to statements/2026/ is allowed; the ledger has 4 rows matching the repo.
+- **Production:** queued as P730 (bucket + policy + ledger row 20261120000000). Window ask is item 4450 (reply "go P730").
+- **Finding, item 4451 (owner decision A/B/C):** admin dashboard downloads (src/App.jsx:995 receipts, :1067 donation-receipts) use the admin's session. The only storage read rule needs employee_profiles admin/manager; on production employee_profiles has 0 rows and the admin is in admin_users. The "Admins can manage all profiles" policy is self-recursive. On zoeist-dev, every signed-in storage read errors with infinite recursion. P730 fixes the Edge Function path (generate, send) only.
+- **Records:** this entry is uncommitted; it goes in with the next code change.
+- **11-20-2026, owner answer to item 4451: A.** Fix the receipt-bucket read rules (use is_admin_user) and the employee_profiles policy recursion.
+- **11-20-2026, item 4451 fix written:** migration 20261120010000_storage_read_rules_and_profile_recursion.sql. It adds schema private with SECURITY DEFINER private.current_employee_role() (not API-exposed). "Admins can manage all profiles" now uses that function instead of self-referencing. "Admins can read donation receipts" and "Admins can read receipts" are now TO authenticated and accept is_admin_user() or an employee admin/manager. Production has no schema private (checked).
+- **Rollback-only dry run on zoeist-dev:** an admin_users admin sees 1 object in each of receipts and donation-receipts; a non-admin signed-in user sees 0 in each; employee_profiles reads give no error for either. No recursion error anywhere.
+- **Independent review:** started. Landing waits for the result. Production order: after P730, which creates the receipts bucket.
+- **11-20-2026, review of 20261120010000 (independent subagent):** no blocking findings. Applied the performance note: function calls wrapped in (SELECT ...). Open precondition for production: confirm schema private is not in the API's exposed schemas (production has no private schema today, checked).
