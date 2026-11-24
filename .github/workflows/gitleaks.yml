@@ -1,6 +1,8 @@
 # Secret scan on every pull request and on pushes to dev and staging (guard-repo, owner request 11-17-2026).
 # A finding fails the check, so the PR cannot merge. Known non-secrets go in .gitleaks.toml.
-# An organization repo needs the free GITLEAKS_LICENSE secret (gitleaks.io), saved once at the org level.
+# 11-23-2026 (owner item 4723, choice A): the gitleaks program itself, pinned to 8.28.0 and checked against the release's SHA-256,
+# instead of gitleaks-action, which needs a GITLEAKS_LICENSE key in an organization repo. No secret is needed.
+# It scans only the new commits: the PR's commits, or the pushed range on dev and staging (one commit for a new branch).
 name: gitleaks
 on:
   pull_request:
@@ -8,7 +10,6 @@ on:
     branches: [dev, staging]
 permissions:
   contents: read
-  pull-requests: read
 jobs:
   gitleaks:
     runs-on: ubuntu-latest
@@ -16,10 +17,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Install gitleaks 8.28.0 (SHA-256 checked)
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan the new commits
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          GITLEAKS_CONFIG: .gitleaks.toml
-          GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          CONFIG=()
+          if [ -f .gitleaks.toml ]; then CONFIG=(--config .gitleaks.toml); fi
+          if [ -n "$BASE" ] && [ "$BASE" != 0000000000000000000000000000000000000000 ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            RANGE="$BASE..$HEAD"
+          else
+            echo "::warning::base ${BASE:-none} is not in this clone (a new branch or a force-push); scanning only $HEAD"
+            RANGE="--max-count=1 --diff-merges=first-parent $HEAD"
+          fi
+          "$RUNNER_TEMP/gitleaks" git "${CONFIG[@]}" --log-opts="$RANGE" --redact --no-banner --exit-code 1 .
